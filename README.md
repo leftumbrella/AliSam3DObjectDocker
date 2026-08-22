@@ -26,6 +26,8 @@
 - [阿里云 FC 自定义容器说明](https://help.aliyun.com/en/functioncompute/fc/custom-container/)
 - [阿里云 FC GPU 实例规格](https://help.aliyun.com/en/functioncompute/fc/product-overview/instance-types-and-specifications)
 - [阿里云 FC HTTP 触发器限制](https://help.aliyun.com/en/functioncompute/fc/http-triggers-overview)
+- [阿里云 FC `unknown/unknown` 镜像排查](https://help.aliyun.com/zh/functioncompute/fc/custom-image-deployment-fails-with-platform-of-image-is-unknown-unknown)
+- [Docker Build attestations](https://docs.docker.com/build/metadata/attestations/)
 
 ## 项目结构
 
@@ -150,10 +152,16 @@ docker buildx build \
   --load \
   --progress=plain \
   --platform linux/amd64 \
+  --provenance=false \
+  --sbom=false \
   --build-arg SAM3D_REF=f91db411c50efee93d8db7aeb323885650f6f722 \
   --build-arg TORCH_CUDA_ARCH_LIST=8.9 \
+  --build-arg MAX_JOBS=2 \
+  --build-arg NVCC_THREADS=2 \
   -t sam3d-fc:cu121 .
 ```
+
+`--provenance=false` 和 `--sbom=false` 是 FC 兼容性要求，必须保留在每一条 `docker buildx build` 命令中，包括直接使用 `--push` 的命令和 CI/CD 配置。较新的 Buildx 默认会把 provenance 作为额外的 attestation manifest 附加到镜像索引；该 manifest 的平台会显示为 `unknown/unknown`，导致 FC 拒绝镜像或无法完成镜像加速。这两个选项属于 Buildx 输出配置，不能写进 Dockerfile 或作为普通 `--build-arg` 传入。
 
 可用构建参数：
 
@@ -219,18 +227,50 @@ FC HTTP 同步调用的请求体总上限为 32 MB。本项目默认把两个文
 
 ## 4. 推送到阿里云 ACR
 
-在同一阿里云账号下创建与 FC 同地域的 ACR 仓库后，替换下面的地域、命名空间和仓库名：
+在同一阿里云账号下创建与 FC 同地域的 ACR 仓库后，替换下面的地域、命名空间和仓库名。每次发布使用不可变标签，避免 FC 已记录的 Digest 与被覆盖后的标签内容不一致：
 
 ```bash
-docker login registry.cn-hangzhou.aliyuncs.com
+REGISTRY_HOST='registry.cn-hangzhou.aliyuncs.com'
+IMAGE_REPOSITORY='YOUR_NAMESPACE/sam3d-fc'
+IMAGE_TAG="cu121-$(git rev-parse --short HEAD)"
+REMOTE_IMAGE="${REGISTRY_HOST}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
-docker tag \
-  sam3d-fc:cu121 \
-  registry.cn-hangzhou.aliyuncs.com/YOUR_NAMESPACE/sam3d-fc:cu121
-
-docker push \
-  registry.cn-hangzhou.aliyuncs.com/YOUR_NAMESPACE/sam3d-fc:cu121
+docker login "$REGISTRY_HOST"
+docker tag sam3d-fc:cu121 "$REMOTE_IMAGE"
+docker push "$REMOTE_IMAGE"
 ```
+
+也可以跳过本地 `--load`，直接从 Buildx 推送到 ACR。FC 兼容选项仍然必须显式指定：
+
+```bash
+docker buildx build \
+  --push \
+  --progress=plain \
+  --platform linux/amd64 \
+  --provenance=false \
+  --sbom=false \
+  --build-arg SAM3D_REF=f91db411c50efee93d8db7aeb323885650f6f722 \
+  --build-arg TORCH_CUDA_ARCH_LIST=8.9 \
+  --build-arg MAX_JOBS=2 \
+  --build-arg NVCC_THREADS=2 \
+  -t "$REMOTE_IMAGE" .
+```
+
+推送后、更新 FC 前检查远程 Manifest：
+
+```bash
+MANIFEST_INFO="$(docker buildx imagetools inspect "$REMOTE_IMAGE")"
+printf '%s\n' "$MANIFEST_INFO"
+
+if printf '%s\n' "$MANIFEST_INFO" | grep -q 'unknown/unknown'; then
+  printf '%s\n' '错误：镜像包含 FC 不支持的 unknown/unknown manifest' >&2
+  exit 1
+fi
+
+docker manifest inspect --verbose "$REMOTE_IMAGE"
+```
+
+只有在检查结果确认为 `linux/amd64` 且不包含 `unknown/unknown` 后，才能把这个新标签配置到 FC。若已经生成了含 attestation 的旧标签，不要继续让 FC 引用它；使用上述兼容选项重新推送一个新标签。构建机与 ACR 不在同一地域或 VPC 时，应使用 ACR 公网地址，而不是带 `-vpc` 的内网地址。
 
 对于此类包含大量 CUDA/C++ 扩展的镜像，优先选择 ACR“本地仓库”，在自己的构建机完成构建后推送。若使用 GitHub、Codeup 或 GitLab 作为 ACR 代码源，构建上下文使用仓库根目录，Dockerfile 路径使用 `/Dockerfile`，并提前确认在线构建的网络、内存、磁盘和超时限制。
 
