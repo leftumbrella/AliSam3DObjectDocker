@@ -63,7 +63,6 @@ ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
 
 COPY requirements-fc.txt /tmp/requirements-fc.txt
 COPY requirements-server.txt /tmp/requirements-server.txt
-COPY scripts/check_cuda_build_env.py /tmp/check_cuda_build_env.py
 COPY scripts/check_mamba_removal.py /tmp/check_mamba_removal.py
 COPY scripts/check_runtime_imports.py /tmp/check_runtime_imports.py
 
@@ -90,6 +89,8 @@ RUN python -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
         -e . \
     && ./patching/hydra
+
+COPY scripts/check_cuda_build_env.py /tmp/check_cuda_build_env.py
 
 # 仅从源码构建 FC 路径需要的两个 CUDA 扩展；二者均锁定上游 commit，
 # 并关闭依赖解析，避免再次从专用索引或 PyPI 搜索整棵依赖树。
