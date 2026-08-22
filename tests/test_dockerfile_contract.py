@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -24,6 +25,11 @@ def _run_blocks(dockerfile: str) -> list[str]:
     return blocks
 
 
+def _micromamba_run_options(block: str) -> list[str]:
+    """Return the option text before each continued micromamba command."""
+    return re.findall(r"micromamba run\s+([^\\\n]+?)\s*\\", block)
+
+
 class DockerfileCudaBuildContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -35,13 +41,15 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
         self.assertEqual(len(matches), 1, f"expected one {package} build block")
         return matches[0]
 
-    def test_cuda_extensions_use_activated_micromamba_environment(self) -> None:
+    def test_cuda_extensions_use_supported_micromamba_run_options(self) -> None:
         for package in ("pytorch3d", "gsplat"):
             with self.subTest(package=package):
                 block = self._extension_block(package)
-                self.assertIn(
-                    "micromamba run --no-capture-output -n sam3d-objects",
-                    block,
+                options = _micromamba_run_options(block)
+                self.assertGreaterEqual(len(options), 1)
+                self.assertEqual(
+                    options,
+                    ["-n sam3d-objects"] * len(options),
                 )
 
     def test_cuda_preflight_precedes_pytorch3d_compilation(self) -> None:

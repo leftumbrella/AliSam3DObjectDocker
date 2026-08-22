@@ -96,15 +96,15 @@ COPY scripts/check_cuda_build_env.py /tmp/check_cuda_build_env.py
 # 并关闭依赖解析，避免再次从专用索引或 PyPI 搜索整棵依赖树。
 # conda-forge 将 CUDA 头文件和库放在 targets/x86_64-linux 下；micromamba
 # 激活脚本负责将这些目录加入编译参数，单独设置 PATH/CONDA_PREFIX 不够。
-RUN micromamba run --no-capture-output -n sam3d-objects \
+RUN micromamba run -n sam3d-objects \
         python /tmp/check_cuda_build_env.py \
-    && micromamba run --no-capture-output -n sam3d-objects \
+    && micromamba run -n sam3d-objects \
         python -m pip install \
             --no-deps \
             --no-build-isolation \
             "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@75ebeeaea0908c5527e7b1e305fbc7681382db47"
 
-RUN micromamba run --no-capture-output -n sam3d-objects \
+RUN micromamba run -n sam3d-objects \
         python -m pip install \
             --no-deps \
             --no-build-isolation \
