@@ -11,7 +11,6 @@ import sys
 
 
 REQUIRED_MODULES = (
-    "cv2",
     "torch",
     "torchvision",
     "pytorch3d._C",

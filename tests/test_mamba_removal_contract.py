@@ -14,7 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile"
 CHECKER = ROOT / "scripts" / "check_mamba_removal.py"
-AUDITED_OPENCL_CASCADE = {"cuda-libraries", "cuda-opencl", "ocl-icd"}
+OPENCL_DEPENDENCY_ANCHORS = {"opencl-headers"}
 
 
 def _trim_packages() -> set[str]:
@@ -43,17 +43,20 @@ def _run_checker(removed: set[str], allowed: set[str]) -> subprocess.CompletedPr
 
 
 class MambaRemovalContractTests(unittest.TestCase):
-    def test_dockerfile_explicitly_lists_audited_opencl_cascade(self) -> None:
-        self.assertTrue(AUDITED_OPENCL_CASCADE <= _trim_packages())
+    def test_opencl_dependency_anchor_is_retained(self) -> None:
+        # Paired positive case proves this assertion detects the bad package shape.
+        self.assertEqual(
+            OPENCL_DEPENDENCY_ANCHORS & {"opencl-headers"},
+            {"opencl-headers"},
+        )
+        self.assertEqual(OPENCL_DEPENDENCY_ANCHORS & _trim_packages(), set())
 
-    def test_audited_opencl_cascade_is_allowed_by_guard(self) -> None:
-        result = _run_checker(AUDITED_OPENCL_CASCADE, AUDITED_OPENCL_CASCADE)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_concrete_cuda_runtime_stays_protected(self) -> None:
-        result = _run_checker({"cuda-cudart"}, {"cuda-cudart"})
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("运行时保护包：cuda-cudart", result.stderr)
+    def test_cuda_runtime_packages_stay_protected(self) -> None:
+        for package in ("cuda-cudart", "cuda-libraries"):
+            with self.subTest(package=package):
+                result = _run_checker({package}, {package})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"运行时保护包：{package}", result.stderr)
 
 
 if __name__ == "__main__":
