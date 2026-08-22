@@ -5,6 +5,8 @@ ARG MICROMAMBA_VERSION=2.8.1-0
 ARG MICROMAMBA_SHA256=9689782d863c05a1bf5d2d371ba527104e7a4eb4310c1637d8653b751aed9c82
 ARG SAM3D_REPOSITORY=https://github.com/facebookresearch/sam-3d-objects.git
 ARG SAM3D_REF=f91db411c50efee93d8db7aeb323885650f6f722
+ARG PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
 ARG TORCH_CUDA_ARCH_LIST=8.9
 ARG MAX_JOBS=4
 ARG NVCC_THREADS=4
@@ -35,6 +37,13 @@ RUN git init \
     && git fetch --depth=1 origin "${SAM3D_REF}" \
     && git checkout --detach FETCH_HEAD
 
+COPY patches/fc-runtime.patch /tmp/fc-runtime.patch
+
+# 该补丁只针对上面锁定的 commit。先做完整上下文校验，避免上游升级后静默错改。
+RUN git apply --check /tmp/fc-runtime.patch \
+    && git apply /tmp/fc-runtime.patch \
+    && rm /tmp/fc-runtime.patch
+
 RUN micromamba env create -y -f environments/default.yml \
     && micromamba clean --all --yes
 
@@ -42,24 +51,61 @@ ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
     CONDA_PREFIX=/opt/micromamba/envs/sam3d-objects \
     CUDA_HOME=/opt/micromamba/envs/sam3d-objects \
     PIP_NO_CACHE_DIR=1 \
-    PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121" \
-    PIP_FIND_LINKS=https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     FORCE_CUDA=1 \
+    LIDRA_SKIP_INIT=true \
+    ATTN_BACKEND=sdpa \
+    SPARSE_ATTN_BACKEND=sdpa \
+    SPARSE_BACKEND=spconv \
     TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} \
     MAX_JOBS=${MAX_JOBS} \
     NVCC_THREADS=${NVCC_THREADS}
 
-RUN python -m pip install -e . \
-    && python -m pip install -e '.[p3d]' \
-    && python -m pip install -e '.[inference]' \
-    && ./patching/hydra
-
+COPY requirements-fc.txt /tmp/requirements-fc.txt
 COPY requirements-server.txt /tmp/requirements-server.txt
 COPY scripts/check_mamba_removal.py /tmp/check_mamba_removal.py
 COPY scripts/check_runtime_imports.py /tmp/check_runtime_imports.py
 
-RUN python -m pip install -r /tmp/requirements-server.txt \
-    && rm /tmp/requirements-server.txt \
+# PyTorch 的专用索引只作用于 PyTorch/torchvision，不再参与普通包解析。
+RUN python -m pip install \
+        --index-url "${PYTORCH_INDEX_URL}" \
+        torch==2.5.1+cu121 \
+        torchvision==0.20.1+cu121
+
+# 只安装 FC 推理路径的普通 PyPI 依赖。MoGe 和 utils3d 使用 --no-deps，
+# 避免 MoGe 声明的 Gradio 演示依赖以及 utils3d 未使用的 OpenGL 依赖。
+RUN python -m pip install \
+        --index-url "${PYPI_INDEX_URL}" \
+        -r /tmp/requirements-fc.txt \
+    && python -m pip install \
+        --no-deps \
+        --no-build-isolation \
+        "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@3913c65d81e05e47b9f367250cf8c0f7462a0900" \
+        "MoGe @ git+https://github.com/microsoft/MoGe.git@a8c37341bc0325ca99b9d57981cc3bb2bd3e255b"
+
+# 上游包本身保留可编辑安装，但禁止重新解析其全量 requirements.txt。
+RUN python -m pip install \
+        --no-deps \
+        --index-url "${PYPI_INDEX_URL}" \
+        -e . \
+    && ./patching/hydra
+
+# 仅从源码构建 FC 路径需要的两个 CUDA 扩展；二者均锁定上游 commit，
+# 并关闭依赖解析，避免再次从专用索引或 PyPI 搜索整棵依赖树。
+RUN python -m pip install \
+        --no-deps \
+        --no-build-isolation \
+        "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@75ebeeaea0908c5527e7b1e305fbc7681382db47"
+
+RUN python -m pip install \
+        --no-deps \
+        --no-build-isolation \
+        "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
+
+RUN python -m pip install \
+        --index-url "${PYPI_INDEX_URL}" \
+        -r /tmp/requirements-server.txt \
+    && rm /tmp/requirements-fc.txt /tmp/requirements-server.txt \
     && rm -rf /opt/sam-3d-objects/.git
 
 # CUDA 扩展已完成编译。裁剪 Conda 构建链前先检查实际级联删除计划，
@@ -119,6 +165,10 @@ ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
     PYTHONPATH=/srv:/opt/sam-3d-objects \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    LIDRA_SKIP_INIT=true \
+    ATTN_BACKEND=sdpa \
+    SPARSE_ATTN_BACKEND=sdpa \
+    SPARSE_BACKEND=spconv \
     SAM3D_ROOT=/opt/sam-3d-objects \
     SAM3D_CONFIG_PATH=/mnt/nas/sam3d/hf/pipeline.yaml \
     TORCH_HOME=/mnt/nas/sam3d/cache/torch \

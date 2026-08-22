@@ -13,8 +13,8 @@
 
 - SAM 3D Objects 官方要求 Linux 64 位和至少 32 GB GPU 显存。
 - 本项目默认面向 FC `fc.gpu.ada.1` 48 GB 规格，并以 `TORCH_CUDA_ARCH_LIST=8.9` 构建 CUDA 扩展。使用其他 GPU 系列前，必须确认其 Compute Capability 并覆盖此构建参数。
-- 上游环境固定 Python 3.11、CUDA Toolkit 12.1.1、PyTorch 2.5.1 + cu121，并包含需要编译的 PyTorch3D、FlashAttention 和 gsplat 等依赖。
-- Dockerfile 在这些扩展编译完成后裁掉 Conda 中的 GCC/NVCC、Nsight、CUDA 头文件和静态开发库；动态 CUDA 运行库与 NVRTC 仍保留。上游通过 pip 直接声明的 `nvidia-cuda-nvcc-cu12` 不会被删除。
+- 上游环境固定 Python 3.11、CUDA Toolkit 12.1.1、PyTorch 2.5.1 + cu121。FC 镜像只编译当前推理路径需要的 PyTorch3D 与 gsplat，并固定使用 PyTorch SDPA；不会安装 FlashAttention 或 xformers。
+- Dockerfile 在这些扩展编译完成后裁掉 Conda 中的 GCC/NVCC、Nsight、CUDA 头文件和静态开发库；动态 CUDA 运行库与 PyTorch 需要的 NVRTC 仍保留。FC 清单不再安装上游仅用于构建的 `nvidia-cuda-nvcc-cu12`。
 - 上游 checkpoint 是受限资源，必须先在 Hugging Face 申请访问并接受相应条款。
 - 上游代码和模型使用 SAM License。部署或分发镜像前，请自行确认用途与许可证要求。
 
@@ -40,12 +40,15 @@
 ├── scripts/
 │   ├── check_mamba_removal.py # Conda 裁剪计划安全门禁
 │   └── check_runtime_imports.py # 裁剪后的运行时完整性校验
+├── patches/
+│   └── fc-runtime.patch # 移除上游推理入口的可选依赖导入副作用
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
 ├── .gitignore
 ├── Dockerfile
 ├── README.md
+├── requirements-fc.txt # FC 最小推理依赖
 └── requirements-server.txt
 ```
 
@@ -124,6 +127,16 @@ mkdir -p /mnt/nas/sam3d/cache/huggingface
 
 推荐在可控的 x86_64 Linux 构建机上构建。即使构建机没有 GPU，Dockerfile 也会通过 `FORCE_CUDA=1` 强制构建 PyTorch3D CUDA 扩展；不过上游仍提示，部分环境可能需要在带 GPU 的计算节点完成构建。
 
+`requirements-fc.txt` 不再引用上游的全量 `requirements.txt`、`p3d` 或 `inference` extra。上游包、MoGe、utils3d、PyTorch3D 和 gsplat 均以固定 commit 和 `--no-deps` 安装；构建期完整性检查同时确认以下组件没有被任何传递依赖重新带入镜像：
+
+- `mosaicml-streaming`、`librosa`、SageMaker、Lightning 等训练或云平台依赖；
+- Jupyter/IPython/Notebook 组件；
+- Gradio、Seaborn、Matplotlib、Open3D、Kaolin 及当前关闭的网格修补/可视化组件；
+- pytest、Black、Flake8 等测试和开发工具；
+- FlashAttention 与 xformers。FC `fc.gpu.ada.1` 使用 PyTorch SDPA。
+
+普通包只访问 `PYPI_INDEX_URL`。阿里云镜像缺少 Hydra 1.3.2 所需的旧版 ANTLR，因此该单一纯 Python 包在清单中使用带 SHA-256 的 PyPI 官方文件 URL；不会为整次解析开放第二个索引。PyTorch 专用索引只出现在安装 `torch`/`torchvision` 的单独命令中，不再通过全局 `PIP_EXTRA_INDEX_URL` 影响其他依赖解析。当前最小清单没有 NGC-only 包，因此镜像构建完全不配置 NGC 索引；以后如恢复此类包，应只在对应的单条安装命令上指定索引。
+
 默认锁定的上游版本是：
 
 ```text
@@ -148,11 +161,13 @@ docker build \
 | `MICROMAMBA_SHA256` | 对应官方发布文件的 SHA-256 | 校验 micromamba 下载内容 |
 | `SAM3D_REPOSITORY` | Meta 官方仓库 URL | 指定上游仓库 |
 | `SAM3D_REF` | 固定 commit | 固定可复现的上游版本 |
+| `PYPI_INDEX_URL` | 阿里云 PyPI 镜像 | 普通 Python 包索引 |
+| `PYTORCH_INDEX_URL` | PyTorch cu121 官方索引 | 仅安装 PyTorch/torchvision |
 | `TORCH_CUDA_ARCH_LIST` | `8.9` | 目标 GPU Compute Capability |
 | `MAX_JOBS` | `4` | CUDA/C++ 并行编译任务数 |
 | `NVCC_THREADS` | `4` | NVCC 并行线程数 |
 
-不要把 `SAM3D_REF` 改成浮动的 `main` 用于生产镜像。升级上游版本时，应同时复核其 `environments/default.yml`、依赖版本和推理输出结构。
+不要把 `SAM3D_REF` 改成浮动的 `main` 用于生产镜像。`patches/fc-runtime.patch` 会在上下文不匹配时主动让构建失败；升级上游版本时，应重新审计并生成该补丁，同时复核其 `environments/default.yml`、依赖版本和推理输出结构。
 
 ## 3. 本地 GPU 验证
 
@@ -248,7 +263,7 @@ git push -u origin main
 
 部署后先调用 `/gpu` 确认 CUDA 可用，再调用 `/initialize` 主动加载模型。若初始化时间或冷启动不可接受，应使用常驻实例、最小实例数或浅休眠策略。
 
-截至 2026-08-12，FC 官方自定义容器文档规定 GPU 镜像的未压缩大小上限为 15 GB。Dockerfile 使用双阶段构建，并在所有 CUDA 扩展编译完成后保守移除 Conda 构建链、调试工具、头文件和静态库；删除前的 dry-run 门禁会在计划触及关键运行库时让构建失败。上游 pip 运行依赖本身仍然很大，推送前必须实际检查镜像的未压缩大小，超限时不能部署。
+截至 2026-08-12，FC 官方自定义容器文档规定 GPU 镜像的未压缩大小上限为 15 GB。Dockerfile 使用双阶段构建，并在所有 CUDA 扩展编译完成后保守移除 Conda 构建链、调试工具、头文件和静态库；删除前的 dry-run 门禁会在计划触及关键运行库时让构建失败。即使已切换到 FC 最小 pip 依赖，PyTorch/CUDA 运行库和模型代码仍然很大，推送前必须实际检查镜像的未压缩大小，超限时不能部署。
 
 ## HTTP 接口
 
@@ -296,6 +311,10 @@ FC 通过 SDK 的 `InvokeFunction` 调用时会转发到固定路径 `/invoke`�
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `LIDRA_SKIP_INIT` | `true` | 跳过上游训练期全局初始化；FC 最小运行时必须保持为 `true` |
+| `ATTN_BACKEND` | `sdpa` | 稠密注意力后端；与精简掉的 FlashAttention/xformers 对应 |
+| `SPARSE_ATTN_BACKEND` | `sdpa` | 稀疏注意力后端；FC Ada 镜像固定使用 SDPA |
+| `SPARSE_BACKEND` | `spconv` | 稀疏卷积后端 |
 | `SAM3D_ROOT` | `/opt/sam-3d-objects` | 上游源码目录 |
 | `SAM3D_CONFIG_PATH` | `/mnt/nas/sam3d/hf/pipeline.yaml` | 模型配置文件 |
 | `TORCH_HOME` | `/mnt/nas/sam3d/cache/torch` | Torch Hub 持久化缓存 |
@@ -313,6 +332,8 @@ FC 通过 SDK 的 `InvokeFunction` 调用时会转发到固定路径 `/invoke`�
 - 本项目没有应用层鉴权、配额和限流，生产环境应使用 FC 触发器鉴权、API 网关或同等控制。
 - `/generate` 是同步接口；大文件响应、超长推理或客户端断连时，建议进一步改为 OSS/NAS 结果落盘和异步任务接口。
 - 上游当前推理入口会同时生成 Gaussian 与 Mesh；因此即使只请求 PLY，仍可能承担 Mesh/GLB 相关的计算和显存开销。若实测成为瓶颈，需要在固定上游版本上改造解码流程。
+- FC 最小运行时固定关闭网格修补、纹理烘焙和布局后处理。若要调用上游 Notebook 演示、平面估计、场景拼接、纹理烘焙或网格修补函数，必须先恢复对应依赖并更新构建期禁止清单；这些能力不属于当前 HTTP API。
+- 当前 checkpoint 必须是普通文件。若改用 Lightning 分片 checkpoint，需要恢复 Lightning 依赖；普通官方 checkpoint 的加载路径不需要它。
 - 仅挂载 checkpoint 不足以离线初始化。部署前必须完成 DINOv2 等运行时缓存预热，或保留受控出网能力。
 - 模型加载与推理尚未在你的目标 FC 实例上执行。GPU 型号、显存、驱动兼容性、CUDA 扩展、峰值显存、推理耗时和输出体积都必须由你实际验证。
 - PLY 是上游 README 明确给出的导出路径。GLB 使用上游结果中的 `glb` 网格对象导出，视觉质量和坐标语义应按业务样本验收。

@@ -4,44 +4,90 @@ from __future__ import annotations
 
 import importlib
 from importlib import metadata
+import os
 from pathlib import Path
+import re
+import sys
 
 
 REQUIRED_MODULES = (
     "torch",
+    "torchvision",
     "pytorch3d._C",
-    "flash_attn_2_cuda",
+    "gsplat",
     "gsplat.csrc",
     "spconv.pytorch",
+    "moge.model.v1",
+    "utils3d",
+    "sam3d_objects.pipeline.inference_pipeline_pointmap",
+    "inference",
     "fastapi",
     "uvicorn",
 )
 
+FORBIDDEN_DISTRIBUTIONS = {
+    # 训练、云平台与音频依赖
+    "librosa",
+    "lightning",
+    "mosaicml-streaming",
+    "pytorch-lightning",
+    "sagemaker",
+    "tensorboard",
+    "torchmetrics",
+    "wandb",
+    # Jupyter 与交互环境
+    "ipykernel",
+    "ipython",
+    "ipycanvas",
+    "ipyevents",
+    "ipywidgets",
+    "jupyter",
+    "jupyter-client",
+    "jupyter-console",
+    "jupyter-core",
+    "jupyter-server",
+    "jupyterlab",
+    "nbclient",
+    "nbconvert",
+    "nbformat",
+    "notebook",
+    # Notebook/网页演示与当前关闭的可选后处理
+    "dash",
+    "gradio",
+    "igraph",
+    "kaolin",
+    "matplotlib",
+    "open3d",
+    "plotly",
+    "pymeshfix",
+    "pyvista",
+    "seaborn",
+    "xatlas",
+    # 开发、格式化与测试工具
+    "autoflake",
+    "black",
+    "flake8",
+    "hypothesis",
+    "pdoc3",
+    "pytest",
+    "usort",
+    # Ada FC 固定使用 PyTorch SDPA，不需要额外 attention wheel。
+    "flash-attn",
+    "xformers",
+}
 
-def _check_kaolin_extension() -> str | None:
-    """只检查扩展文件，避免执行 Kaolin 0.17 的顶层 Warp 导入链。"""
-    try:
-        distribution = metadata.distribution("kaolin")
-    except metadata.PackageNotFoundError:
-        return "kaolin: 未找到已安装的发行包"
 
-    candidates = []
-    for entry in distribution.files or ():
-        if (
-            len(entry.parts) >= 2
-            and entry.parts[-2] == "kaolin"
-            and entry.name.startswith("_C")
-            and entry.suffix == ".so"
-        ):
-            candidates.append(Path(distribution.locate_file(entry)))
-
-    if not any(candidate.is_file() for candidate in candidates):
-        return "kaolin: 未找到 kaolin/_C*.so 编译扩展"
-    return None
+def _canonicalize_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def main() -> None:
     failures: list[str] = []
+
+    os.environ.setdefault("LIDRA_SKIP_INIT", "true")
+    notebook_path = Path("/opt/sam-3d-objects/notebook")
+    if str(notebook_path) not in sys.path:
+        sys.path.insert(0, str(notebook_path))
 
     for module_name in REQUIRED_MODULES:
         try:
@@ -49,9 +95,14 @@ def main() -> None:
         except Exception as exc:  # 构建期需要汇总全部缺失项。
             failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
 
-    kaolin_failure = _check_kaolin_extension()
-    if kaolin_failure is not None:
-        failures.append(kaolin_failure)
+    installed = {
+        _canonicalize_distribution_name(dist.metadata["Name"])
+        for dist in metadata.distributions()
+        if dist.metadata.get("Name")
+    }
+    unexpected = sorted(FORBIDDEN_DISTRIBUTIONS & installed)
+    if unexpected:
+        failures.append("镜像包含禁止的发行包：" + ", ".join(unexpected))
 
     if failures:
         details = "\n".join(f"- {failure}" for failure in failures)

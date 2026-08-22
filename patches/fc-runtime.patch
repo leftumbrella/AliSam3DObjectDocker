@@ -1,0 +1,289 @@
+diff --git a/notebook/inference.py b/notebook/inference.py
+index 94e99a7..873c625 100644
+--- a/notebook/inference.py
++++ b/notebook/inference.py
+@@ -5,7 +5,6 @@ import os
+ os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
+ os.environ["LIDRA_SKIP_INIT"] = "true"
+ 
+-import sys
+ from typing import Union, Optional, List, Callable
+ import numpy as np
+ from PIL import Image
+@@ -16,14 +15,7 @@ import math
+ import utils3d
+ import shutil
+ import subprocess
+-import seaborn as sns
+-from PIL import Image
+-import numpy as np
+-import gradio as gr
+-import matplotlib.pyplot as plt
+ from copy import deepcopy
+-from kaolin.visualize import IpyTurntableVisualizer
+-from kaolin.render.camera import Camera, CameraExtrinsics, PinholeIntrinsics
+ import builtins
+ from pytorch3d.transforms import quaternion_multiply, quaternion_invert
+ 
+@@ -31,8 +23,6 @@ import sam3d_objects  # REMARK(Pierre) : do not remove this import
+ from sam3d_objects.pipeline.inference_pipeline_pointmap import InferencePipelinePointMap
+ from sam3d_objects.model.backbone.tdfy_dit.utils import render_utils
+ 
+-from sam3d_objects.utils.visualization import SceneVisualizer
+-
+ __all__ = ["Inference"]
+ 
+ WHITELIST_FILTERS = [
+@@ -253,6 +243,8 @@ def normalized_gaussian(scene_gs, in_place=False, outlier_percentile=None):
+ 
+ 
+ def make_scene(*outputs, in_place=False):
++    from sam3d_objects.utils.visualization import SceneVisualizer
++
+     if not in_place:
+         outputs = [deepcopy(output) for output in outputs]
+ 
+@@ -379,6 +371,9 @@ def load_masks(folder_path, indices_list=None, extension=".png"):
+ 
+ 
+ def display_image(image, masks=None):
++    import matplotlib.pyplot as plt
++    import seaborn as sns
++
+     def imshow(image, ax):
+         ax.axis("off")
+         ax.imshow(image)
+@@ -405,6 +400,8 @@ def display_image(image, masks=None):
+ 
+ 
+ def interactive_visualizer(ply_path):
++    import gradio as gr
++
+     with gr.Blocks() as demo:
+         gr.Markdown("# 3D Gaussian Splatting (black-screen loading might take a while)")
+         gr.Model3D(
+diff --git a/sam3d_objects/data/dataset/tdfy/img_and_mask_transforms.py b/sam3d_objects/data/dataset/tdfy/img_and_mask_transforms.py
+index 91b8b12..6dff57f 100644
+--- a/sam3d_objects/data/dataset/tdfy/img_and_mask_transforms.py
++++ b/sam3d_objects/data/dataset/tdfy/img_and_mask_transforms.py
+@@ -4,7 +4,7 @@ import random
+ from typing import Optional, Dict
+ 
+ import numpy as np
+-import matplotlib.pyplot as plt
++from PIL import Image
+ import torchvision.transforms.functional
+ from sam3d_objects.data.dataset.tdfy.img_processing import pad_to_square_centered
+ from sam3d_objects.model.backbone.dit.embedder.point_remapper import PointRemapper
+@@ -98,7 +98,8 @@ def load_rgb(fpath: str) -> torch.Tensor:
+     """
+     Load a RGB(A) image from a file path.
+     """
+-    image = plt.imread(fpath)  # Why use matplotlib?
++    with Image.open(fpath) as source:
++        image = np.array(source)
+     if image.dtype == "uint8":
+         image = image / 255
+         image = image.astype(np.float32)
+diff --git a/sam3d_objects/model/backbone/tdfy_dit/representations/mesh/flexicubes/flexicubes.py b/sam3d_objects/model/backbone/tdfy_dit/representations/mesh/flexicubes/flexicubes.py
+index 583b5e3..6509129 100644
+--- a/sam3d_objects/model/backbone/tdfy_dit/representations/mesh/flexicubes/flexicubes.py
++++ b/sam3d_objects/model/backbone/tdfy_dit/representations/mesh/flexicubes/flexicubes.py
+@@ -15,7 +15,26 @@
+ # limitations under the License.
+ import torch
+ from .tables import *
+-from kaolin.utils.testing import check_tensor
++
++
++def check_tensor(tensor, shape=None, dtype=None, device=None, throw=True):
++    """Validate the tensor fields used by FlexiCubes without importing Kaolin."""
++    valid = True
++    if shape is not None:
++        valid = len(shape) == tensor.ndim and all(
++            expected is None or expected == actual
++            for expected, actual in zip(shape, tensor.shape)
++        )
++    if dtype is not None:
++        valid = valid and dtype == tensor.dtype
++    if device is not None:
++        valid = valid and device == tensor.device.type
++    if not valid and throw:
++        raise ValueError(
++            f"tensor with shape {tensor.shape}, dtype {tensor.dtype}, "
++            f"device {tensor.device.type} failed validation"
++        )
++    return valid
+ 
+ __all__ = [
+     'FlexiCubes'
+@@ -388,4 +407,4 @@ class FlexiCubes:
+             vd = torch.cat([vd, vd_center])
+             faces = quad_vd_idx[:, self.quad_split_train].reshape(-1, 4, 2)
+             faces = torch.cat([faces, vd_center_idx.reshape(-1, 1, 1).repeat(1, 4, 1)], -1).reshape(-1, 3)
+-        return vd, faces, s_edges, edge_indices, vd_color
+\ No newline at end of file
++        return vd, faces, s_edges, edge_indices, vd_color
+diff --git a/sam3d_objects/model/backbone/tdfy_dit/utils/postprocessing_utils.py b/sam3d_objects/model/backbone/tdfy_dit/utils/postprocessing_utils.py
+index de7a4da..9f52f92 100644
+--- a/sam3d_objects/model/backbone/tdfy_dit/utils/postprocessing_utils.py
++++ b/sam3d_objects/model/backbone/tdfy_dit/utils/postprocessing_utils.py
+@@ -7,10 +7,6 @@ from PIL import Image
+ from tqdm import tqdm
+ import trimesh
+ import trimesh.visual
+-import xatlas
+-import pyvista as pv
+-from pymeshfix import _meshfix
+-import igraph
+ import cv2
+ from PIL import Image
+ from .random_utils import sphere_hammersley_sequence
+@@ -44,6 +40,9 @@ def _fill_holes(
+         num_views (int): Number of views to rasterize the mesh.
+         verbose (bool): Whether to print progress.
+     """
++    import igraph
++    from pymeshfix import _meshfix
++
+     # Construct cameras
+     yaws = []
+     pitchs = []
+@@ -308,6 +307,8 @@ def postprocess_mesh(
+ 
+     # Simplify
+     if simplify and simplify_ratio > 0:
++        import pyvista as pv
++
+         mesh = pv.PolyData(
+             vertices, np.concatenate([np.full((faces.shape[0], 1), 3), faces], axis=1)
+         )
+@@ -352,6 +353,8 @@ def parametrize_mesh(vertices: np.array, faces: np.array):
+         faces (np.array): Faces of the mesh. Shape (F, 3).
+     """
+ 
++    import xatlas
++
+     vmapping, indices, uvs = xatlas.parametrize(vertices, faces)
+ 
+     vertices = vertices[vmapping]
+diff --git a/sam3d_objects/model/io.py b/sam3d_objects/model/io.py
+index 9d05de6..a3a16de 100644
+--- a/sam3d_objects/model/io.py
++++ b/sam3d_objects/model/io.py
+@@ -1,15 +1,10 @@
+ # Copyright (c) Meta Platforms, Inc. and affiliates.
+ from typing import Any, Callable, Dict, List, Optional, Union, Iterable
+-import lightning.pytorch as pl
+ import torch
+ from pathlib import Path
+ import os
+ import re
+ from loguru import logger
+-from lightning.pytorch.utilities.consolidate_checkpoint import (
+-    _format_checkpoint,
+-    _load_distributed_checkpoint,
+-)
+ from glob import glob
+ 
+ from sam3d_objects.data.utils import get_child, set_child
+@@ -134,6 +129,16 @@ def get_last_checkpoint(path: str):
+ 
+ 
+ def load_sharded_checkpoint(path: str, device: Optional[str]):
++    try:
++        from lightning.pytorch.utilities.consolidate_checkpoint import (
++            _format_checkpoint,
++            _load_distributed_checkpoint,
++        )
++    except ImportError as exc:
++        raise RuntimeError(
++            "sharded checkpoints require the optional lightning package"
++        ) from exc
++
+     if device != "cpu":
+         raise RuntimeError(
+             f'loading sharded weights on device "{device}" is not available, please use the "cpu" device instead'
+@@ -144,7 +149,7 @@ def load_sharded_checkpoint(path: str, device: Optional[str]):
+ 
+ 
+ def load_model_from_checkpoint(
+-    model: Union[pl.LightningModule, torch.nn.Module],
++    model: torch.nn.Module,
+     checkpoint_path: str,
+     strict: bool = True,
+     device: Optional[str] = None,
+@@ -167,7 +172,11 @@ def load_model_from_checkpoint(
+     else:  # if neither a file nor a directory, path does not exist
+         raise FileNotFoundError(checkpoint_path)
+ 
+-    if isinstance(model, pl.LightningModule):
++    try:
++        from lightning.pytorch import LightningModule
++    except ImportError:
++        LightningModule = None
++    if LightningModule is not None and isinstance(model, LightningModule):
+         model.on_load_checkpoint(checkpoint)
+ 
+     # get state dictionary
+diff --git a/sam3d_objects/pipeline/inference_pipeline.py b/sam3d_objects/pipeline/inference_pipeline.py
+index d34d5c2..038529d 100644
+--- a/sam3d_objects/pipeline/inference_pipeline.py
++++ b/sam3d_objects/pipeline/inference_pipeline.py
+@@ -9,6 +9,10 @@ from torch.utils._pytree import tree_map_only
+ 
+ 
+ def set_attention_backend():
++    if os.environ.get("ATTN_BACKEND") and os.environ.get("SPARSE_ATTN_BACKEND"):
++        logger.info("Using attention backends configured by the runtime environment")
++        return
++
+     if torch.cuda.is_available():
+         gpu_name = torch.cuda.get_device_name(0)
+     else:
+diff --git a/sam3d_objects/pipeline/inference_utils.py b/sam3d_objects/pipeline/inference_utils.py
+index d78dc7c..a69be78 100644
+--- a/sam3d_objects/pipeline/inference_utils.py
++++ b/sam3d_objects/pipeline/inference_utils.py
+@@ -1,7 +1,10 @@
+ # Copyright (c) Meta Platforms, Inc. and affiliates.
+ import torch
+ import numpy as np
+-import open3d as o3d
++try:
++    import open3d as o3d
++except ImportError:
++    o3d = None
+ import trimesh
+ from pytorch3d.structures import Meshes
+ from pytorch3d.transforms import quaternion_to_matrix, Transform3d, matrix_to_quaternion
+@@ -1102,4 +1105,4 @@ def estimate_plane_area(mask):
+     bbox_area = bbox_height * bbox_width
+ 
+     # Return ratio of bounding box area to total image area
+-    return bbox_area / total_area
+\ No newline at end of file
++    return bbox_area / total_area
+diff --git a/sam3d_objects/pipeline/layout_post_optimization_utils.py b/sam3d_objects/pipeline/layout_post_optimization_utils.py
+index b5736c4..1f5bbfd 100644
+--- a/sam3d_objects/pipeline/layout_post_optimization_utils.py
++++ b/sam3d_objects/pipeline/layout_post_optimization_utils.py
+@@ -16,7 +16,10 @@ from pytorch3d.renderer import (
+ )
+ from pytorch3d.transforms import quaternion_to_matrix, Transform3d, matrix_to_quaternion, quaternion_multiply
+ import random
+-import open3d as o3d
++try:
++    import open3d as o3d
++except ImportError:
++    o3d = None
+ from scipy.ndimage import label, binary_dilation, binary_fill_holes, binary_erosion, minimum_filter
+ import copy
+ from sam3d_objects.model.backbone.tdfy_dit.renderers.gaussian_render import GaussianRenderer
+@@ -1292,4 +1295,4 @@ def compute_iou_gs(rendered, mask_obj_gt, threshold=0.5):
+         return torch.tensor(1.0 if intersection == 0 else 0.0)  # avoid division by zero
+ 
+     iou = intersection / union
+-    return iou
+\ No newline at end of file
++    return iou
