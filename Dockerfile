@@ -8,8 +8,8 @@ ARG SAM3D_REF=f91db411c50efee93d8db7aeb323885650f6f722
 ARG PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
 ARG TORCH_CUDA_ARCH_LIST=8.9
-ARG MAX_JOBS=4
-ARG NVCC_THREADS=4
+ARG MAX_JOBS=2
+ARG NVCC_THREADS=2
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -63,6 +63,7 @@ ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
 
 COPY requirements-fc.txt /tmp/requirements-fc.txt
 COPY requirements-server.txt /tmp/requirements-server.txt
+COPY scripts/check_cuda_build_env.py /tmp/check_cuda_build_env.py
 COPY scripts/check_mamba_removal.py /tmp/check_mamba_removal.py
 COPY scripts/check_runtime_imports.py /tmp/check_runtime_imports.py
 
@@ -92,15 +93,21 @@ RUN python -m pip install \
 
 # 仅从源码构建 FC 路径需要的两个 CUDA 扩展；二者均锁定上游 commit，
 # 并关闭依赖解析，避免再次从专用索引或 PyPI 搜索整棵依赖树。
-RUN python -m pip install \
-        --no-deps \
-        --no-build-isolation \
-        "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@75ebeeaea0908c5527e7b1e305fbc7681382db47"
+# conda-forge 将 CUDA 头文件和库放在 targets/x86_64-linux 下；micromamba
+# 激活脚本负责将这些目录加入编译参数，单独设置 PATH/CONDA_PREFIX 不够。
+RUN micromamba run --no-capture-output -n sam3d-objects \
+        python /tmp/check_cuda_build_env.py \
+    && micromamba run --no-capture-output -n sam3d-objects \
+        python -m pip install \
+            --no-deps \
+            --no-build-isolation \
+            "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@75ebeeaea0908c5527e7b1e305fbc7681382db47"
 
-RUN python -m pip install \
-        --no-deps \
-        --no-build-isolation \
-        "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
+RUN micromamba run --no-capture-output -n sam3d-objects \
+        python -m pip install \
+            --no-deps \
+            --no-build-isolation \
+            "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
 
 RUN python -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
@@ -140,6 +147,7 @@ RUN set -eu; \
     python /tmp/check_runtime_imports.py; \
     micromamba clean --all --yes; \
     rm \
+        /tmp/check_cuda_build_env.py \
         /tmp/check_mamba_removal.py \
         /tmp/check_runtime_imports.py \
         /tmp/mamba-remove-plan.json

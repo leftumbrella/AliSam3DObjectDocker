@@ -125,7 +125,7 @@ mkdir -p /mnt/nas/sam3d/cache/huggingface
 
 ## 2. 构建镜像
 
-推荐在可控的 x86_64 Linux 构建机上构建。即使构建机没有 GPU，Dockerfile 也会通过 `FORCE_CUDA=1` 强制构建 PyTorch3D CUDA 扩展；不过上游仍提示，部分环境可能需要在带 GPU 的计算节点完成构建。
+推荐在可控的 x86_64 Linux 构建机上构建。即使构建机没有 GPU，Dockerfile 也会通过 `FORCE_CUDA=1` 强制构建 PyTorch3D CUDA 扩展；不过上游仍提示，部分环境可能需要在带 GPU 的计算节点完成构建。CUDA 扩展构建通过 `micromamba run` 激活 Conda 环境，使 `targets/x86_64-linux` 下的头文件和库进入编译参数；构建前还会实际预处理 `cuda_runtime_api.h`，避免长时间编译后才暴露环境错误。
 
 `requirements-fc.txt` 不再引用上游的全量 `requirements.txt`、`p3d` 或 `inference` extra。上游包、MoGe、utils3d、PyTorch3D 和 gsplat 均以固定 commit 和 `--no-deps` 安装；构建期完整性检查同时确认以下组件没有被任何传递依赖重新带入镜像：
 
@@ -146,7 +146,9 @@ f91db411c50efee93d8db7aeb323885650f6f722
 构建命令：
 
 ```bash
-docker build \
+docker buildx build \
+  --load \
+  --progress=plain \
   --platform linux/amd64 \
   --build-arg SAM3D_REF=f91db411c50efee93d8db7aeb323885650f6f722 \
   --build-arg TORCH_CUDA_ARCH_LIST=8.9 \
@@ -164,8 +166,8 @@ docker build \
 | `PYPI_INDEX_URL` | 阿里云 PyPI 镜像 | 普通 Python 包索引 |
 | `PYTORCH_INDEX_URL` | PyTorch cu121 官方索引 | 仅安装 PyTorch/torchvision |
 | `TORCH_CUDA_ARCH_LIST` | `8.9` | 目标 GPU Compute Capability |
-| `MAX_JOBS` | `4` | CUDA/C++ 并行编译任务数 |
-| `NVCC_THREADS` | `4` | NVCC 并行线程数 |
+| `MAX_JOBS` | `2` | CUDA/C++ 并行编译任务数 |
+| `NVCC_THREADS` | `2` | NVCC 并行线程数 |
 
 不要把 `SAM3D_REF` 改成浮动的 `main` 用于生产镜像。`patches/fc-runtime.patch` 会在上下文不匹配时主动让构建失败；升级上游版本时，应重新审计并生成该补丁，同时复核其 `environments/default.yml`、依赖版本和推理输出结构。
 
