@@ -76,6 +76,20 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
         self.assertIn("SAM3D_DINOV2_REPO", patcher)
         self.assertIn("python /tmp/patch_offline_runtime.py", self.dockerfile)
 
+    def test_offline_source_patch_keeps_expensive_cuda_layers_cacheable(self) -> None:
+        gsplat_build = self.dockerfile.index('"gsplat @ git+https://github.com/')
+        patch_copy = self.dockerfile.index(
+            "COPY scripts/patch_offline_runtime.py /tmp/patch_offline_runtime.py"
+        )
+        patch_run = self.dockerfile.index(
+            "RUN python /tmp/patch_offline_runtime.py /opt/sam-3d-objects"
+        )
+        server_dependencies = self.dockerfile.index("-r /tmp/requirements-server.txt")
+
+        self.assertGreater(patch_copy, gsplat_build)
+        self.assertGreater(patch_run, patch_copy)
+        self.assertLess(patch_run, server_dependencies)
+
 
 if __name__ == "__main__":
     unittest.main()

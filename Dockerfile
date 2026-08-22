@@ -65,9 +65,6 @@ COPY requirements-fc.txt /tmp/requirements-fc.txt
 COPY requirements-server.txt /tmp/requirements-server.txt
 COPY scripts/check_mamba_removal.py /tmp/check_mamba_removal.py
 COPY scripts/check_runtime_imports.py /tmp/check_runtime_imports.py
-COPY scripts/patch_offline_runtime.py /tmp/patch_offline_runtime.py
-
-RUN python /tmp/patch_offline_runtime.py /opt/sam-3d-objects
 
 # PyTorch 的专用索引只作用于 PyTorch/torchvision，不再参与普通包解析。
 RUN python -m pip install \
@@ -112,6 +109,12 @@ RUN micromamba run -n sam3d-objects \
             --no-deps \
             --no-build-isolation \
             "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
+
+# 运行时源码补丁放在昂贵的 CUDA 扩展构建之后，避免仅修改补丁脚本时
+# 让 PyTorch、PyTorch3D 和 gsplat 的缓存层全部失效。
+COPY scripts/patch_offline_runtime.py /tmp/patch_offline_runtime.py
+
+RUN python /tmp/patch_offline_runtime.py /opt/sam-3d-objects
 
 RUN python -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
