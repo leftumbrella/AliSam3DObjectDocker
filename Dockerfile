@@ -118,6 +118,8 @@ RUN python -m pip install \
 
 # CUDA 扩展已完成编译。裁剪 Conda 构建链前先检查实际级联删除计划，
 # 确保动态 CUDA 运行库、NVRTC、Python 和 C++ 运行库仍被保留。
+# opencl-headers 的删除会按锁文件依赖级联到 ocl-icd、cuda-opencl 和无文件的
+# cuda-libraries 元包；FC 推理不使用 OpenCL，因此把这条已审计级联显式列出。
 RUN set -eu; \
     packages="\
         binutils binutils_impl_linux-64 binutils_linux-64 \
@@ -127,18 +129,18 @@ RUN set -eu; \
         cuda-cudart-static cuda-cudart-static_linux-64 \
         cuda-cuobjdump cuda-cupti-dev cuda-cuxxfilt \
         cuda-driver-dev cuda-driver-dev_linux-64 cuda-gdb \
-        cuda-libraries-dev cuda-nsight \
+        cuda-libraries cuda-libraries-dev cuda-nsight \
         cuda-nvcc cuda-nvcc-dev_linux-64 cuda-nvcc-impl \
         cuda-nvcc-tools cuda-nvcc_linux-64 cuda-nvdisasm \
         cuda-nvml-dev cuda-nvprof cuda-nvprune cuda-nvvp \
-        cuda-opencl-dev cuda-profiler-api cuda-sanitizer-api \
+        cuda-opencl cuda-opencl-dev cuda-profiler-api cuda-sanitizer-api \
         cuda-tools cuda-toolkit cuda-visual-tools \
         cxx-compiler gcc gcc_impl_linux-64 gcc_linux-64 gds-tools \
         gxx gxx_impl_linux-64 gxx_linux-64 kernel-headers_linux-64 \
         libcublas-dev libcufft-dev libcufile-dev libcurand-dev \
         libgcc-devel_linux-64 libcusolver-dev libcusparse-dev \
         libnpp-dev libnvjitlink-dev libnvjpeg-dev libsanitizer \
-        libstdcxx-devel_linux-64 nsight-compute opencl-headers \
+        libstdcxx-devel_linux-64 nsight-compute ocl-icd opencl-headers \
         sysroot_linux-64\
     "; \
     micromamba remove --dry-run --json -n sam3d-objects ${packages} \

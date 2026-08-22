@@ -5,11 +5,12 @@ import sys
 from pathlib import Path
 
 
+# cuda-libraries 是无运行时文件的依赖聚合元包；Dockerfile 会显式审计并删除它。
+# 真正必须保留的 CUDA 动态库包仍逐项列在这里。
 PROTECTED_PACKAGES = {
     "cuda-cudart",
     "cuda-cudart_linux-64",
     "cuda-cupti",
-    "cuda-libraries",
     "cuda-nvrtc",
     "cuda-nvtx",
     "cuda-version",
