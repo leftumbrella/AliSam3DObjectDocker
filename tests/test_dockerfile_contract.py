@@ -9,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile"
+OFFLINE_PATCHER = ROOT / "scripts" / "patch_offline_runtime.py"
 
 
 def _run_blocks(dockerfile: str) -> list[str]:
@@ -58,6 +59,22 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
         install = block.find("python -m pip install")
         self.assertGreaterEqual(preflight, 0)
         self.assertGreater(install, preflight)
+
+    def test_runtime_defaults_to_zero_egress_model_loading(self) -> None:
+        for setting in (
+            "HF_HUB_OFFLINE=1",
+            "TRANSFORMERS_OFFLINE=1",
+            "HF_DATASETS_OFFLINE=1",
+            "HF_HUB_DISABLE_TELEMETRY=1",
+        ):
+            with self.subTest(setting=setting):
+                self.assertIn(setting, self.dockerfile)
+
+        patcher = OFFLINE_PATCHER.read_text(encoding="utf-8")
+        self.assertIn('source = "local"', patcher)
+        self.assertIn('"pretrained": False', patcher)
+        self.assertIn("SAM3D_DINOV2_REPO", patcher)
+        self.assertIn("python /tmp/patch_offline_runtime.py", self.dockerfile)
 
 
 if __name__ == "__main__":

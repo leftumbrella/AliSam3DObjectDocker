@@ -65,6 +65,9 @@ COPY requirements-fc.txt /tmp/requirements-fc.txt
 COPY requirements-server.txt /tmp/requirements-server.txt
 COPY scripts/check_mamba_removal.py /tmp/check_mamba_removal.py
 COPY scripts/check_runtime_imports.py /tmp/check_runtime_imports.py
+COPY scripts/patch_offline_runtime.py /tmp/patch_offline_runtime.py
+
+RUN python /tmp/patch_offline_runtime.py /opt/sam-3d-objects
 
 # PyTorch 的专用索引只作用于 PyTorch/torchvision，不再参与普通包解析。
 RUN python -m pip install \
@@ -153,6 +156,7 @@ RUN set -eu; \
         /tmp/check_cuda_build_env.py \
         /tmp/check_mamba_removal.py \
         /tmp/check_runtime_imports.py \
+        /tmp/patch_offline_runtime.py \
         /tmp/mamba-remove-plan.json
 
 FROM ubuntu:22.04 AS runtime
@@ -184,6 +188,10 @@ ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
     SAM3D_CONFIG_PATH=/mnt/nas/sam3d/hf/pipeline.yaml \
     TORCH_HOME=/mnt/nas/sam3d/cache/torch \
     HF_HOME=/mnt/nas/sam3d/cache/huggingface \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_DATASETS_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
     SAM3D_COMPILE=false \
     SAM3D_MAX_UPLOAD_MB=20 \
     SAM3D_MAX_REQUEST_MB=30 \

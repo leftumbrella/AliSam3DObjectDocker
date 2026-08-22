@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -10,6 +11,11 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from app.offline import (
+    OfflineRuntimeError,
+    configure_offline_environment,
+    install_offline_torch_hub_guard,
+)
 from app.settings import Settings
 
 LOGGER = logging.getLogger(__name__)
@@ -112,7 +118,19 @@ class ModelManager:
         if not notebook_path.is_dir():
             raise ModelNotReadyError(f"未找到 SAM3D notebook 目录：{notebook_path}")
 
+        torch_home = Path(os.environ.get("TORCH_HOME", "/mnt/nas/sam3d/cache/torch"))
+        dinov2_repository, dinov2_weight = configure_offline_environment(torch_home)
+
         import torch
+
+        try:
+            install_offline_torch_hub_guard(
+                torch,
+                repository=dinov2_repository,
+                weight=dinov2_weight,
+            )
+        except OfflineRuntimeError as exc:
+            raise ModelNotReadyError(str(exc)) from exc
 
         if not torch.cuda.is_available():
             raise ModelNotReadyError("未检测到可用的 CUDA GPU")

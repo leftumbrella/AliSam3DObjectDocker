@@ -7,7 +7,7 @@
 - `PLY`：官方示例使用的 Gaussian Splat。
 - `GLB`：SAM 3D Objects 解码得到的网格。
 
-模型权重不进入镜像，默认把 NAS 根目录挂载到 `/mnt/nas/sam3d`，其中 `hf/` 保存 checkpoint，`cache/` 保存上游运行时缓存。这样不会把 Hugging Face Token 写入镜像，也能降低镜像体积。该路径位于 FC 允许的 NAS 本地挂载目录 `/mnt` 下。
+模型权重不进入镜像，而是把 OSS 或 NAS 中的离线资源挂载到 `/mnt/nas/sam3d`，其中 `hf/` 保存 checkpoint，`cache/` 保存上游运行时缓存。这样不会把 Hugging Face Token 写入镜像，也能降低镜像体积。`/mnt/nas/sam3d` 是容器内的本地挂载路径；即使底层使用 OSS，也不需要改这个路径。
 
 ## 重要前提
 
@@ -71,59 +71,82 @@ Uvicorn 固定使用一个 worker，服务内部也使用异步锁串行执行 G
 
 镜像只包含 Ubuntu、CUDA 用户态环境、Python 依赖、SAM 3D Objects 源码和 HTTP 服务。NVIDIA 内核驱动及 `libcuda.so` 由 FC 平台注入，不应安装或复制到镜像中。
 
-## 1. 准备 checkpoint
+## 1. 在香港服务器准备完整离线资源
 
-先在 [Hugging Face 模型页面](https://huggingface.co/facebook/sam-3d-objects)申请权限，并在一台已安装 Hugging Face CLI 的 Linux 机器上登录：
+深圳 FC 不需要、也不应该在弹性扩容时临时下载模型。先在能访问 Hugging Face、GitHub 和 Meta 下载站点的香港 Linux 服务器上一次性准备完整资源，再上传到深圳 OSS。先在 [SAM 3D Objects 模型页面](https://huggingface.co/facebook/sam-3d-objects)申请权限并登录：
 
 ```bash
 hf auth login
+cd ~/AliSam3DObjectDocker
+
+python3 scripts/prepare_offline_assets.py \
+  --download-sam3d \
+  --transfer-root /root/sam3d-transfer
 ```
 
-把模型直接下载到 NAS。例如：
+脚本会完成以下操作：
+
+- 使用当前 `hf` 登录凭证下载固定 revision `2e73555018d2741ccd486e56c24fac41155a1dc6` 的受限主 checkpoint；Token 只保留在香港服务器，不会进入资源包、镜像或 Git。
+- 下载固定版本的 DINOv2 源码与 `dinov2_vitl14_reg4_pretrain.pth`，并检查 Git commit、文件大小和 SHA-256。
+- 下载固定版本的 MoGe `model.pt`，检查文件大小和 SHA-256。
+- 把 `pipeline.yaml` 中的 `Ruicheng/moge-vitl` 替换为容器内路径 `/mnt/nas/sam3d/hf/moge/model.pt`。原配置只备份到 `/root/sam3d-transfer/backups/`，不会上传到 OSS。
+- 按固定 revision 的官方文件名和精确字节数检查 `pipeline.yaml` 引用的 6 个配置文件和 6 个 checkpoint，拒绝缺失、Git LFS 指针或截断文件，并生成覆盖主 checkpoint、MoGe、DINOv2 源码和权重的 `offline-assets.sha256` 清单。
+
+如果主 checkpoint 已经下载过，不必重下；直接指定其 `checkpoints` 目录：
 
 ```bash
-hf download \
-  --repo-type model \
-  --local-dir /mnt/nas/sam3d/hf-download \
-  --max-workers 1 \
-  facebook/sam-3d-objects
+python3 scripts/prepare_offline_assets.py \
+  --sam3d-source /实际路径/checkpoints \
+  --transfer-root /root/sam3d-transfer
 ```
 
-下载完成后应存在：
+准备完成后的目录必须是：
 
 ```text
-/mnt/nas/sam3d/hf-download/checkpoints/pipeline.yaml
-```
-
-按上游安装说明整理 checkpoint，并准备运行时缓存目录：
-
-```bash
-mv /mnt/nas/sam3d/hf-download/checkpoints /mnt/nas/sam3d/hf
-mkdir -p /mnt/nas/sam3d/cache/torch
-mkdir -p /mnt/nas/sam3d/cache/huggingface
-```
-
-最终 NAS 目录应类似：
-
-```text
-/mnt/nas/sam3d/
+/root/sam3d-transfer/storage/
+├── offline-assets.sha256
 ├── hf/
 │   ├── pipeline.yaml
-│   └── ...
+│   ├── moge/model.pt
+│   └── pipeline.yaml 引用的主 checkpoint 文件
 └── cache/
-    ├── torch/
-    └── huggingface/
+    ├── huggingface/
+    └── torch/hub/
+        ├── facebookresearch_dinov2_main/
+        └── checkpoints/dinov2_vitl14_reg4_pretrain.pth
 ```
 
-在 FC 中把这个 NAS 根目录挂载到 `/mnt/nas/sam3d`。容器最终看到的配置文件应为：
+任何下载中断后都可以重跑同一命令；公共大文件使用 `.partial` 断点续传，已有正式文件只会在完整性检查通过后复用，不会被静默覆盖。上传前还可以执行一次只读门禁：
+
+```bash
+python3 scripts/prepare_offline_assets.py \
+  --verify-only \
+  --transfer-root /root/sam3d-transfer
+```
+
+然后上传 `storage/` 的内容到**真实存在的深圳 OSS Bucket** 的 `/sam3d` 前缀。Bucket 名必须是 OSS 控制台中的小写名称，不是 FC 自动生成的组件名或 ID：
+
+```bash
+export TRANSFER_ROOT=/root/sam3d-transfer
+export OSS_BUCKET='你的真实深圳-bucket-name'
+: "${OSS_BUCKET:?请先设置真实的 OSS Bucket 名称}"
+
+ossutil cp -r \
+  "$TRANSFER_ROOT/storage/" \
+  "oss://${OSS_BUCKET}/sam3d/" \
+  --checkpoint-dir /root/oss-upload-checkpoints
+```
+
+在 FC 的 OSS 挂载配置中选择该 Bucket，把 Bucket 子目录 `/sam3d` 以读写方式挂载到本地目录 `/mnt/nas/sam3d`。最终容器必须能看到：
 
 ```text
 /mnt/nas/sam3d/hf/pipeline.yaml
+/mnt/nas/sam3d/hf/moge/model.pt
+/mnt/nas/sam3d/cache/torch/hub/facebookresearch_dinov2_main/
+/mnt/nas/sam3d/cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth
 ```
 
-不要把 Hugging Face Token 放入 `Dockerfile`、普通构建参数、环境变量文件或 Git 仓库。
-
-上游模型初始化还会通过 Torch Hub/Hugging Face Hub 获取 DINOv2 等依赖模型。首次预热必须允许函数访问相关站点；缓存会写入 NAS 的 `cache/`，后续实例可以复用。若生产环境禁止出网，请先在单个可出网 GPU 实例上完成 `/initialize`，确认缓存齐全后再关闭出网；首次预热期间不要并发启动多个实例。
+不要把 Hugging Face Token、OSS AccessKey 或其他密钥放入 `Dockerfile`、构建参数、`.env` 文件或 Git 仓库。FC 应通过函数角色和控制台挂载配置访问 OSS。
 
 ## 2. 构建镜像
 
@@ -299,11 +322,11 @@ git push -u origin main
 | 单实例并发 | `1` |
 | 函数超时 | 按实测推理时间设置，并为首次加载预留时间 |
 | 临时磁盘 | 按最大 GLB/PLY 输出和并发量预留，建议从 10 GB 起验证 |
-| NAS 挂载 | NAS 根目录映射到 `/mnt/nas/sam3d`；`hf/` 存 checkpoint，`cache/` 可写 |
+| OSS 挂载 | Bucket 子目录 `/sam3d` 读写挂载到 `/mnt/nas/sam3d`；`hf/` 存 checkpoint，`cache/` 可写 |
 | HTTP 触发器 | 使用需要鉴权的方式，除非明确接受公网匿名访问 |
 | 实例策略 | 对延迟敏感时配置最小实例数或常驻实例 |
 
-部署后先调用 `/gpu` 确认 CUDA 可用，再调用 `/initialize` 主动加载模型。若初始化时间或冷启动不可接受，应使用常驻实例、最小实例数或浅休眠策略。
+环境变量配置完成后更新函数并发布新版本，使后续弹性实例统一继承镜像、挂载与变量。部署后先调用 `/gpu` 确认 CUDA 可用，再调用 `/initialize` 主动加载模型。若初始化时间或冷启动不可接受，应使用常驻实例、最小实例数或浅休眠策略。
 
 截至 2026-08-12，FC 官方自定义容器文档规定 GPU 镜像的未压缩大小上限为 15 GB。Dockerfile 使用双阶段构建，并在所有 CUDA 扩展编译完成后保守移除 Conda 构建链、调试工具、头文件和静态库；删除前的 dry-run 门禁会在计划触及关键运行库时让构建失败。即使已切换到 FC 最小 pip 依赖，PyTorch/CUDA 运行库和模型代码仍然很大，推送前必须实际检查镜像的未压缩大小，超限时不能部署。
 
@@ -361,6 +384,10 @@ FC 通过 SDK 的 `InvokeFunction` 调用时会转发到固定路径 `/invoke`�
 | `SAM3D_CONFIG_PATH` | `/mnt/nas/sam3d/hf/pipeline.yaml` | 模型配置文件 |
 | `TORCH_HOME` | `/mnt/nas/sam3d/cache/torch` | Torch Hub 持久化缓存 |
 | `HF_HOME` | `/mnt/nas/sam3d/cache/huggingface` | Hugging Face Hub 持久化缓存 |
+| `HF_HUB_OFFLINE` | `1` | 禁止 Hugging Face Hub 发起网络请求 |
+| `TRANSFORMERS_OFFLINE` | `1` | 禁止 Transformers 尝试下载模型或配置 |
+| `HF_DATASETS_OFFLINE` | `1` | 禁止 Hugging Face Datasets 尝试联网 |
+| `HF_HUB_DISABLE_TELEMETRY` | `1` | 关闭 Hugging Face 遥测 |
 | `SAM3D_COMPILE` | `false` | 是否启用上游模型编译 |
 | `SAM3D_MAX_UPLOAD_MB` | `20` | 单个上传文件上限 |
 | `SAM3D_MAX_REQUEST_MB` | `30` | 图片与 Mask 合计上限，低于 FC 的 32 MB 请求体限制 |
@@ -369,6 +396,12 @@ FC 通过 SDK 的 `InvokeFunction` 调用时会转发到固定路径 `/invoke`�
 | `PORT` | `9000` | HTTP 监听端口，必须与 FC CAPort 一致 |
 | `KEEP_ALIVE_TIMEOUT` | `900` | Uvicorn Keep-Alive 秒数 |
 
+镜像已经默认设置 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1` 和 `HF_DATASETS_OFFLINE=1`，深圳 FC 的函数配置中也应显式保留这些值。它们不是一次性的登录操作：环境变量和 OSS 挂载属于函数版本配置，每个扩容出来的新实例都会自动继承。
+
+模型初始化还会安装进程级 Torch Hub 门禁：只允许 `/mnt/nas/sam3d/cache/torch/hub/facebookresearch_dinov2_main`，把遗留的 `facebookresearch/dinov2` 请求重定向到这个本地目录，并直接拒绝任何 Torch Hub 下载。FC 运行时因此不会为了模型加载访问 Hugging Face、GitHub 或 DINO 下载站点；任一离线文件缺失时会立即返回明确错误，而不是回退到公网。
+
+SAM3D 的稀疏结构和结构化隐变量生成器各有一个 DINO 条件编码器，因此日志中出现两次 `Loading DINO model` 是两份模型实例，不是同一权重下载两次。新镜像的日志应显示本地目录和 `source: local`；离线模式同时传入 `pretrained=False`，随后由两个官方主 checkpoint 以 `strict=True` 分别加载完整参数，避免重复读取外部 DINO 预训练权重。
+
 ## 已知边界与风险
 
 - 本项目没有应用层鉴权、配额和限流，生产环境应使用 FC 触发器鉴权、API 网关或同等控制。
@@ -376,7 +409,7 @@ FC 通过 SDK 的 `InvokeFunction` 调用时会转发到固定路径 `/invoke`�
 - 上游当前推理入口会同时生成 Gaussian 与 Mesh；因此即使只请求 PLY，仍可能承担 Mesh/GLB 相关的计算和显存开销。若实测成为瓶颈，需要在固定上游版本上改造解码流程。
 - FC 最小运行时固定关闭网格修补、纹理烘焙和布局后处理。若要调用上游 Notebook 演示、平面估计、场景拼接、纹理烘焙或网格修补函数，必须先恢复对应依赖并更新构建期禁止清单；这些能力不属于当前 HTTP API。
 - 当前 checkpoint 必须是普通文件。若改用 Lightning 分片 checkpoint，需要恢复 Lightning 依赖；普通官方 checkpoint 的加载路径不需要它。
-- 仅挂载 checkpoint 不足以离线初始化。部署前必须完成 DINOv2 等运行时缓存预热，或保留受控出网能力。
+- 仅上传主 checkpoint 不足以离线初始化。部署前必须运行 `scripts/prepare_offline_assets.py --verify-only`，确认主 checkpoint、MoGe、DINOv2 源码和权重全部就位；FC 开启 `HF_HUB_OFFLINE=1` 后不再依赖预热实例或公网。
 - 模型加载与推理尚未在你的目标 FC 实例上执行。GPU 型号、显存、驱动兼容性、CUDA 扩展、峰值显存、推理耗时和输出体积都必须由你实际验证。
 - PLY 是上游 README 明确给出的导出路径。GLB 使用上游结果中的 `glb` 网格对象导出，视觉质量和坐标语义应按业务样本验收。
 - 不要在镜像内安装 NVIDIA Driver，不要用 `docker commit` 保存一个已注入宿主机驱动的运行容器。
