@@ -32,7 +32,6 @@ NVCC_THREADS="${NVCC_THREADS:-2}"
 ASSUME_YES=0
 NON_INTERACTIVE=0
 DRY_RUN=0
-NO_TMUX=0
 CURRENT_STEP='启动'
 ACR_LOGIN_ACTIVE=0
 OSSUTIL_BIN=''
@@ -67,7 +66,6 @@ usage() {
   --nvcc-threads N           NVCC 线程数，默认 2
   --non-interactive          禁止所有提示，缺少信息或凭证时直接失败
   --yes                      跳过执行前确认；--non-interactive 必须同时使用
-  --no-tmux                  不自动进入 tmux 会话
   --dry-run                  只显示计划，不安装、下载、上传、构建或登录
   -h, --help                 显示帮助
 
@@ -80,6 +78,7 @@ usage() {
 
 推荐直接运行脚本并按提示输入。重复运行会复用下载文件、OSS 断点、
 Buildx 缓存和已推送镜像层，不会把任何密码写入项目或结果文件。
+脚本始终在当前终端前台连续执行；SSH 断开会终止进程，重新运行可续传。
 EOF
 }
 
@@ -189,10 +188,6 @@ parse_args() {
         ;;
       --yes)
         ASSUME_YES=1
-        shift
-        ;;
-      --no-tmux)
-        NO_TMUX=1
         shift
         ;;
       --dry-run)
@@ -374,10 +369,6 @@ check_resources() {
 
 install_base_tools() {
   CURRENT_STEP='安装 Ubuntu 基础工具'
-  if [[ "${SAM3D_DEPLOY_BOOTSTRAPPED:-0}" == '1' ]]; then
-    return
-  fi
-
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y \
@@ -388,70 +379,8 @@ install_base_tools() {
     python3 \
     python3-pip \
     python3-venv \
-    tmux \
     unzip
   unset DEBIAN_FRONTEND
-}
-
-shell_quote_command() {
-  local command=''
-  local argument quoted
-  for argument in "$@"; do
-    printf -v quoted '%q' "$argument"
-    if [[ -n "$command" ]]; then
-      command="$command $quoted"
-    else
-      command=$quoted
-    fi
-  done
-  printf '%s' "$command"
-}
-
-maybe_relaunch_in_tmux() {
-  local session command status
-  local -a args
-
-  [[ "$NO_TMUX" -eq 0 ]] || return
-  [[ "$NON_INTERACTIVE" -eq 0 ]] || return
-  [[ -z "${TMUX:-}" ]] || return
-  [[ "${SAM3D_DEPLOY_INSIDE_TMUX:-0}" != '1' ]] || return
-
-  if [[ -n "${HF_TOKEN:-}${OSS_ACCESS_KEY_ID:-}${OSS_ACCESS_KEY_SECRET:-}${OSS_SESSION_TOKEN:-}${ACR_PASSWORD:-}" ]]; then
-    warn '检测到凭证环境变量，为避免把凭证复制进 tmux server 环境，本次不自动切换 tmux'
-    return
-  fi
-
-  session="sam3d-deploy-${GIT_COMMIT_SHORT}"
-  if tmux has-session -t "$session" 2>/dev/null; then
-    die "tmux 会话 $session 已存在，请先执行 tmux attach -t $session 查看"
-  fi
-
-  args=(
-    env
-    SAM3D_DEPLOY_BOOTSTRAPPED=1
-    SAM3D_DEPLOY_INSIDE_TMUX=1
-    bash
-    "$PROJECT_ROOT/scripts/deploy_from_hk.sh"
-    --yes
-    --no-tmux
-    --oss-bucket "$OSS_BUCKET"
-    --acr-image "$ACR_IMAGE"
-    --acr-username "$ACR_USERNAME"
-    --transfer-root "$TRANSFER_ROOT"
-    --max-jobs "$MAX_JOBS"
-    --nvcc-threads "$NVCC_THREADS"
-  )
-  if [[ -n "$SAM3D_SOURCE" ]]; then
-    args+=(--sam3d-source "$SAM3D_SOURCE")
-  fi
-
-  command="$(shell_quote_command "${args[@]}")"
-  log "长任务将在 tmux 会话 $session 中执行；SSH 断开后可用 tmux attach -t $session 恢复"
-  set +e
-  tmux new-session -s "$session" "$command"
-  status=$?
-  set -e
-  exit "$status"
 }
 
 configure_docker_repository() {
@@ -939,7 +868,6 @@ main() {
   confirm_execution
   check_resources
   install_base_tools
-  maybe_relaunch_in_tmux
   ensure_docker
   ensure_tool_venv
   ensure_ossutil

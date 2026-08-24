@@ -57,6 +57,29 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn("--acr-image", result.stdout)
         self.assertIn("敏感信息不接受命令行参数", result.stdout)
 
+    def test_script_runs_in_foreground_without_tmux_relaunch(self) -> None:
+        result = subprocess.run(
+            [str(SCRIPT), "--help"],
+            cwd=ROOT,
+            env=_safe_environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("当前终端前台连续执行", result.stdout)
+        self.assertIn("install_base_tools\n  ensure_docker", self.script)
+        for removed in (
+            "tmux",
+            "--no-tmux",
+            "SAM3D_DEPLOY_BOOTSTRAPPED",
+            "SAM3D_DEPLOY_INSIDE_TMUX",
+            "shell_quote_command",
+            "maybe_relaunch_in_tmux",
+        ):
+            with self.subTest(removed=removed):
+                self.assertNotIn(removed, self.script)
+
     def test_dry_run_renders_the_full_plan_without_root_or_linux(self) -> None:
         result = subprocess.run(
             [
@@ -242,6 +265,7 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn("--acr-image", self.deployment)
         self.assertIn("read -rp '深圳 ACR 完整公网仓库地址", self.deployment)
         self.assertNotIn("--acr-host 'crpi-xxxx", self.deployment)
+        self.assertNotIn("tmux", self.deployment)
 
 
 if __name__ == "__main__":

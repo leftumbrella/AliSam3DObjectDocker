@@ -124,7 +124,6 @@ apt-get install -y \
   python3 \
   python3-pip \
   python3-venv \
-  tmux \
   unzip
 ```
 
@@ -160,14 +159,6 @@ docker buildx inspect --bootstrap
 ```
 
 如果 `docker buildx version` 仍然报缺少插件，先检查是否混装了发行版的 `docker.io` 和 Docker 官方软件包。不要用 `DOCKER_BUILDKIT=1 docker build` 绕过这个错误。
-
-长时间下载和构建建议放进 `tmux`，SSH 断线后任务不会随终端退出：
-
-```bash
-tmux new -s sam3d-deploy
-```
-
-重新连接后使用 `tmux attach -t sam3d-deploy` 回到会话。
 
 ## 下载项目代码
 
@@ -211,13 +202,11 @@ cd /root/AliSam3DObjectDocker
   --acr-username 'your-acr-user'
 ```
 
-默认交互模式在安装 `tmux` 后会自动把长任务转入独立会话，SSH 断开不会终止下载、构建或推送。若脚本检测到凭证环境变量，为避免把凭证复制进 tmux server 环境，它不会自动切换；这种情况下应先手动进入 `tmux`，再设置凭证和运行脚本。
+脚本始终在当前 SSH 终端前台连续执行，不会创建、切换或接管其他终端会话。执行期间需要保持 SSH 连接；如果连接中断，重新运行同一命令即可复用已下载文件、OSS 断点、Buildx 缓存和已推送镜像层。
 
-自动化环境可以使用无交互模式。下面通过隐藏输入把凭证放进当前 `tmux` 会话的环境，不把值写到命令行：
+自动化环境可以使用无交互模式。下面通过隐藏输入把凭证放进当前 Shell 环境，不把值写到命令行：
 
 ```bash
-tmux new -s sam3d-deploy
-
 read -rsp 'Hugging Face Access Token: ' HF_TOKEN && printf '\n'
 read -rsp 'OSS AccessKey ID: ' OSS_ACCESS_KEY_ID && printf '\n'
 read -rsp 'OSS AccessKey Secret: ' OSS_ACCESS_KEY_SECRET && printf '\n'
@@ -227,7 +216,6 @@ export HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET ACR_PASSWORD
 ./scripts/deploy_from_hk.sh \
   --non-interactive \
   --yes \
-  --no-tmux \
   --oss-bucket 'your-shenzhen-bucket' \
   --acr-image 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject' \
   --acr-username 'your-acr-user'
