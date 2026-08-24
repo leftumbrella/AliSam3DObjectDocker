@@ -9,6 +9,8 @@
 
 模型权重不进入镜像，而是把 OSS 或 NAS 中的离线资源挂载到 `/mnt/nas/sam3d`，其中 `hf/` 保存 checkpoint，`cache/` 保存上游运行时缓存。这样不会把 Hugging Face Token 写入镜像，也能降低镜像体积。`/mnt/nas/sam3d` 是容器内的本地挂载路径；即使底层使用 OSS，也不需要改这个路径。
 
+从一台全新的香港 ECS 开始部署时，按 [阿里云 FC GPU 从零部署手册](DEPLOYMENT.md) 操作。手册包含服务器初始化、离线模型准备、OSS 上传、ACR 推送、FC 设置、验收和回滚。
+
 ## 重要前提
 
 - SAM 3D Objects 官方要求 Linux 64 位和至少 32 GB GPU 显存。
