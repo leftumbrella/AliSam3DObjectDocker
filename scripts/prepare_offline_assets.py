@@ -19,6 +19,17 @@ import tempfile
 
 SAM3D_REPOSITORY = "facebook/sam-3d-objects"
 SAM3D_REVISION = "2e73555018d2741ccd486e56c24fac41155a1dc6"
+SAM3_REPOSITORY = "facebook/sam3"
+# Traceable to the Hugging Face model API with expanded LFS metadata:
+# https://huggingface.co/api/models/facebook/sam3/revision/3c879f39826c281e95690f02c7821c4de09afae7?blobs=true
+# The Git source commit used by Dockerfile.segmenter belongs to a separate
+# repository/history and is therefore pinned independently.
+SAM3_REVISION = "3c879f39826c281e95690f02c7821c4de09afae7"
+SAM3_FILENAME = "sam3.pt"
+SAM3_WEIGHT_SIZE = 3_450_062_241
+SAM3_WEIGHT_SHA256 = (
+    "9999e2341ceef5e136daa386eecb55cb414446a00ac2b55eb2dfd2f7c3cf8c9e"
+)
 DINOV2_REPOSITORY = "https://github.com/facebookresearch/dinov2.git"
 DINOV2_REF = "7764ea0f912e53c92e82eb78a2a1631e92725fc8"
 DINOV2_WEIGHT_URL = (
@@ -423,6 +434,70 @@ def download_sam3d_checkpoint(download_root: Path) -> Path:
     return download_root / "checkpoints"
 
 
+def verify_sam3_checkpoint(path: Path) -> None:
+    verify_known_file(
+        path,
+        expected_size=SAM3_WEIGHT_SIZE,
+        expected_sha256=SAM3_WEIGHT_SHA256,
+        label="SAM 3 checkpoint",
+    )
+
+
+def copy_sam3_checkpoint(source: Path, destination: Path) -> None:
+    source_file = source / SAM3_FILENAME if source.is_dir() else source
+    verify_sam3_checkpoint(source_file)
+    if destination.is_symlink():
+        raise AssetError(f"refusing to copy SAM 3 checkpoint through symlink: {destination}")
+    if destination.exists():
+        verify_sam3_checkpoint(destination)
+        print(f"[reuse] SAM 3 checkpoint: {destination}")
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".partial")
+    if temporary.exists() or temporary.is_symlink():
+        raise AssetError(f"SAM 3 checkpoint partial path already exists: {temporary}")
+    try:
+        shutil.copyfile(source_file, temporary)
+        verify_sam3_checkpoint(temporary)
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    print(f"[copied] SAM 3 checkpoint: {destination}")
+
+
+def download_sam3_checkpoint(download_root: Path) -> Path:
+    if shutil.which("hf") is None:
+        raise AssetError(
+            "Hugging Face CLI 'hf' and HF_TOKEN are required to download SAM 3"
+        )
+    download_root.mkdir(parents=True, exist_ok=True)
+    destination = download_root / SAM3_FILENAME
+    if destination.is_symlink():
+        raise AssetError(f"refusing to download SAM 3 checkpoint through symlink: {destination}")
+    if destination.exists():
+        verify_sam3_checkpoint(destination)
+        print(f"[reuse] SAM 3 checkpoint: {destination}")
+        return destination
+    run(
+        [
+            "hf",
+            "download",
+            "--repo-type",
+            "model",
+            "--revision",
+            SAM3_REVISION,
+            "--local-dir",
+            str(download_root),
+            SAM3_REPOSITORY,
+            SAM3_FILENAME,
+        ],
+        label=f"download gated checkpoint {SAM3_REPOSITORY}",
+    )
+    verify_sam3_checkpoint(destination)
+    return destination
+
+
 def verify_dinov2_source(source: Path) -> list[Path]:
     required = source / "dinov2" / "hub" / "backbones.py"
     if not required.is_file():
@@ -581,16 +656,26 @@ def verify_bundle(transfer_root: Path) -> None:
         expected_sha256=DINOV2_WEIGHT_SHA256,
         label="DINOv2 model",
     )
+    sam3_model = storage / "sam3" / SAM3_FILENAME
+    verify_sam3_checkpoint(sam3_model)
     hf_cache = storage / "cache" / "huggingface"
     if not hf_cache.is_dir():
         raise AssetError(f"Hugging Face cache directory is missing: {hf_cache}")
     verify_checksum_manifest(
         storage,
-        [pipeline, *main_files, moge_model, dinov2_model, *dinov2_source_files],
+        [
+            pipeline,
+            *main_files,
+            moge_model,
+            dinov2_model,
+            *dinov2_source_files,
+            sam3_model,
+        ],
     )
     print(f"[verified] main checkpoint: {len(main_files)} referenced files and SHA-256")
     print("[verified] MoGe model: exact size and SHA-256")
     print("[verified] DINOv2 source ref and model SHA-256")
+    print("[verified] SAM 3 checkpoint exact size and SHA-256")
 
 
 def prepare(args: argparse.Namespace) -> None:
@@ -634,21 +719,47 @@ def prepare(args: argparse.Namespace) -> None:
         expected_sha256=MOGE_WEIGHT_SHA256,
         label="MoGe model",
     )
+    sam3_destination = storage / "sam3" / SAM3_FILENAME
+    sam3_source = (
+        args.sam3_source.expanduser().resolve()
+        if args.sam3_source
+        else download_root / "sam3" / SAM3_FILENAME
+    )
+    if args.download_sam3:
+        sam3_source = download_sam3_checkpoint(download_root / "sam3")
+    if sam3_source.exists():
+        copy_sam3_checkpoint(sam3_source, sam3_destination)
+    elif not sam3_destination.is_file():
+        raise AssetError(
+            "SAM 3 checkpoint is unavailable; use --download-sam3 with HF_TOKEN, "
+            "or pass --sam3-source /path/to/sam3.pt"
+        )
+    verify_sam3_checkpoint(sam3_destination)
     main_files = main_checkpoint_files(pipeline)
     dinov2_source_files = verify_dinov2_source(
         storage / "cache" / "torch" / "hub" / DINOV2_DIRECTORY
     )
-    manifest_files = [
+    legacy_manifest_files = [
         pipeline,
         *main_files,
         storage / "hf" / "moge" / "model.pt",
         storage / "cache" / "torch" / "hub" / "checkpoints" / DINOV2_WEIGHT,
         *dinov2_source_files,
     ]
+    manifest_files = [*legacy_manifest_files, sam3_destination]
     manifest = storage / CHECKSUM_MANIFEST
     if manifest.exists():
-        verify_checksum_manifest(storage, manifest_files)
-        print(f"[reuse] verified checksum manifest: {manifest}")
+        try:
+            verify_checksum_manifest(storage, manifest_files)
+            print(f"[reuse] verified checksum manifest: {manifest}")
+        except AssetError as exc:
+            if "checksum manifest inventory mismatch" not in str(exc):
+                raise
+            # Safely migrate a bundle created before SAM 3 was added. The old
+            # manifest must verify exactly before the new checkpoint is added.
+            verify_checksum_manifest(storage, legacy_manifest_files)
+            write_checksum_manifest(storage, manifest_files)
+            print(f"[extended] checksum manifest with SAM 3 checkpoint: {manifest}")
     else:
         write_checksum_manifest(storage, manifest_files)
         print(f"[created] checksum manifest: {manifest}")
@@ -683,6 +794,16 @@ def parse_args() -> argparse.Namespace:
         help="download the gated main checkpoint with the logged-in hf CLI",
     )
     parser.add_argument(
+        "--sam3-source",
+        type=Path,
+        help="existing facebook/sam3 sam3.pt file or directory containing it",
+    )
+    parser.add_argument(
+        "--download-sam3",
+        action="store_true",
+        help="download the gated SAM 3 checkpoint with the logged-in hf CLI",
+    )
+    parser.add_argument(
         "--verify-only",
         action="store_true",
         help="perform no downloads or edits; verify an already prepared bundle",
@@ -692,13 +813,29 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="verify only the main checkpoint already copied under storage/hf",
     )
+    parser.add_argument(
+        "--verify-sam3-only",
+        action="store_true",
+        help="verify only storage/sam3/sam3.pt",
+    )
     args = parser.parse_args()
-    if args.verify_only and args.verify_main_only:
-        parser.error("--verify-only and --verify-main-only are mutually exclusive")
-    if (args.verify_only or args.verify_main_only) and (
-        args.download_sam3d or args.sam3d_source
+    verification_modes = sum(
+        int(value)
+        for value in (args.verify_only, args.verify_main_only, args.verify_sam3_only)
+    )
+    if verification_modes > 1:
+        parser.error("verification modes are mutually exclusive")
+    if verification_modes and (
+        args.download_sam3d
+        or args.sam3d_source
+        or args.download_sam3
+        or args.sam3_source
     ):
         parser.error("verification modes cannot be combined with download/source options")
+    if args.download_sam3d and args.sam3d_source:
+        parser.error("--download-sam3d and --sam3d-source are mutually exclusive")
+    if args.download_sam3 and args.sam3_source:
+        parser.error("--download-sam3 and --sam3-source are mutually exclusive")
     return args
 
 
@@ -713,6 +850,11 @@ def main() -> int:
                 transfer_root / "storage" / "hf" / "pipeline.yaml"
             )
             print(f"[verified] main checkpoint: {len(files)} referenced files")
+        elif args.verify_sam3_only:
+            verify_sam3_checkpoint(
+                transfer_root / "storage" / "sam3" / SAM3_FILENAME
+            )
+            print("[verified] SAM 3 checkpoint exact size and SHA-256")
         else:
             with preparation_lock(transfer_root):
                 prepare(args)

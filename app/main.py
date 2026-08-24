@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.types import Receive, Scope, Send
 
@@ -25,6 +26,13 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url=None,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(settings.cors_allow_origins),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 
@@ -99,7 +107,11 @@ async def gpu() -> dict[str, object]:
     }
 
 
-@app.post("/initialize")
+@app.post(
+    "/initialize",
+    summary="FC Initializer 生命周期回调",
+    description="由函数计算在实例启动后调用；业务请求不应手动触发。",
+)
 async def initialize() -> dict[str, object]:
     try:
         await model_manager.initialize()
@@ -127,6 +139,11 @@ async def generate(
     seed: Annotated[int, Form(ge=0, le=2_147_483_647)] = 42,
     output_format: Annotated[Literal["ply", "glb"], Form()] = "ply",
 ) -> FileResponse:
+    if not model_manager.loaded:
+        raise HTTPException(
+            status_code=503,
+            detail="SAM3D 模型尚未由 FC Initializer 预热；请检查实例初始化日志",
+        )
     image_data = await _read_upload(image, "image")
     mask_data = await _read_upload(mask, "mask")
     if len(image_data) + len(mask_data) > settings.max_request_bytes:

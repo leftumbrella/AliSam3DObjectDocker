@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.offline import (
     OfflineRuntimeError,
@@ -37,11 +37,16 @@ class ModelNotReadyError(RuntimeError):
 
 
 class ModelManager:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        inference_lock: asyncio.Lock | None = None,
+    ) -> None:
         self._settings = settings
         self._model: Any | None = None
         self._load_lock = asyncio.Lock()
-        self._inference_lock = asyncio.Lock()
+        self._inference_lock = inference_lock or asyncio.Lock()
         self._load_error: str | None = None
 
     @property
@@ -81,7 +86,10 @@ class ModelManager:
         output_format: str,
         output_path: Path,
     ) -> None:
-        await self.initialize()
+        if not self.loaded:
+            raise ModelNotReadyError(
+                "SAM3D 模型尚未由 FC Initializer 预热；请检查实例初始化日志"
+            )
 
         async with self._inference_lock:
             worker = asyncio.create_task(
@@ -184,7 +192,8 @@ def decode_image(data: bytes, max_pixels: int) -> np.ndarray:
             if source.width * source.height > max_pixels:
                 raise ValueError(f"图片像素数不能超过 {max_pixels}")
             source.load()
-            return np.array(source.convert("RGB"), dtype=np.uint8, copy=True)
+            transposed = ImageOps.exif_transpose(source)
+            return np.array(transposed.convert("RGB"), dtype=np.uint8, copy=True)
     except (OSError, Image.DecompressionBombError) as exc:
         raise ValueError("无法解析上传的图片") from exc
 

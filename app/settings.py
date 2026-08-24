@@ -25,6 +25,14 @@ def _read_positive_int(name: str, default: int) -> int:
     return value
 
 
+def _read_origins(name: str, default: str = "*") -> tuple[str, ...]:
+    raw = os.getenv(name, default)
+    origins = tuple(part.strip() for part in raw.split(",") if part.strip())
+    if not origins:
+        raise ValueError(f"环境变量 {name} 至少需要一个 Origin")
+    return origins
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     sam3d_root: Path
@@ -34,9 +42,10 @@ class Settings:
     max_request_bytes: int
     max_image_pixels: int
     tmp_dir: Path
+    cors_allow_origins: tuple[str, ...]
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         sam3d_root = Path(os.getenv("SAM3D_ROOT", "/opt/sam-3d-objects"))
         config_path = Path(
             os.getenv(
@@ -56,4 +65,5 @@ class Settings:
             max_request_bytes=max_request_mb * 1024 * 1024,
             max_image_pixels=_read_positive_int("SAM3D_MAX_IMAGE_PIXELS", 40_000_000),
             tmp_dir=Path(os.getenv("SAM3D_TMP_DIR", "/tmp/sam3d")),
+            cors_allow_origins=_read_origins("CORS_ALLOW_ORIGINS"),
         )

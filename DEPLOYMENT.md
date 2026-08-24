@@ -1,6 +1,6 @@
 # 阿里云 FC GPU 从零部署手册
 
-这份手册覆盖完整部署链路：香港 ECS 下载代码和模型、构建镜像、上传深圳 OSS、推送深圳 ACR、创建深圳函数计算（FC）GPU 函数，以及上线后的验证和回滚。
+这份手册覆盖完整部署链路：香港 ECS 下载 SAM 3 与 SAM 3D Objects、构建两张镜像、上传深圳 OSS、推送深圳 ACR、创建两个深圳函数计算（FC）GPU 函数，并通过 Initializer 生命周期回调预热模型。
 
 文中的命令以 Ubuntu 22.04 x86_64 为基准，默认在香港 ECS 的 `root` 用户下执行。使用普通用户也可以，把系统安装命令加上 `sudo`，并把 `/root` 下的工作目录换成该用户有权限的路径。
 
@@ -9,9 +9,10 @@
 | 组件 | 地域 | 用途 |
 | --- | --- | --- |
 | 香港 ECS | 中国香港 | 访问 GitHub、Hugging Face 和模型下载站；构建镜像并向深圳上传 |
-| OSS Bucket | 华南 1（深圳） | 保存主 checkpoint、MoGe、DINOv2 源码和权重 |
-| ACR 镜像仓库 | 华南 1（深圳） | 保存 FC 自定义容器镜像 |
-| FC GPU 函数 | 华南 1（深圳） | 挂载 OSS，加载模型并提供 HTTP API |
+| OSS Bucket | 华南 1（深圳） | 保存 SAM 3、SAM 3D、MoGe、DINOv2 源码和权重 |
+| ACR 镜像仓库 | 华南 1（深圳） | 保存分割与 3D 生成两张自定义容器镜像 |
+| SAM 3 分割函数 | 华南 1（深圳） | 原图和正负点实时生成二值 Mask |
+| SAM 3D 生成函数 | 华南 1（深圳） | 原图和 Mask 生成 PLY 或 GLB |
 
 香港 ECS 使用 OSS 和 ACR 的公网地址。带 `-internal` 或 `-vpc` 的地址只适合同地域、同 VPC 的机器，香港 ECS 不能用深圳 VPC 地址。
 
@@ -44,6 +45,18 @@
 - 使用标准存储，不要把在线推理所需模型放进归档存储。
 
 记录真实 Bucket 名。FC 自动生成的组件名、资源 ID 和页面标题都不是 Bucket 名。
+
+### 必须预先存在的账号级资源
+
+一键脚本会完成项目资源的上传与两个 FC 函数配置，但不会代替账号所有者创建以下基础设施：
+
+- 一个真实存在的深圳私有 OSS Bucket。
+- 一个真实存在的深圳 ACR 实例、命名空间与仓库。
+- 一个 FC 执行角色 ARN。角色必须允许 FC 使用，并对本次 OSS 版本前缀具有 `oss:ListObjects` 与 `oss:GetObject` 权限。
+- 运行脚本的身份必须能创建或更新 FC 函数、HTTP 触发器和预留实例配置。脚本只使用阿里云 SDK 默认凭证链，推荐 ECS RAM Role 或临时 STS，不接受 AccessKey 命令行参数。
+- Hugging Face 账号已同时获准读取 `facebook/sam3` 与 `facebook/sam-3d-objects`。
+
+这些资源准备好后，正常发布不需要再到 FC 控制台逐项填写镜像、挂载、Initializer 或预留实例。
 
 为上传资源创建专用 RAM 用户或临时凭证，只授予目标 Bucket 的列举、上传和读取权限。不要使用阿里云主账号 AccessKey，也不要把 AccessKey 写进 Git、Dockerfile、镜像构建参数或 FC 环境变量。
 
@@ -97,7 +110,7 @@
 
 ### Hugging Face 权限
 
-打开 [facebook/sam-3d-objects](https://huggingface.co/facebook/sam-3d-objects)，登录 Hugging Face，申请模型访问权限并接受许可证。没有通过访问申请时，主 checkpoint 下载会返回 401 或 403。
+分别打开 [facebook/sam3](https://huggingface.co/facebook/sam3) 与 [facebook/sam-3d-objects](https://huggingface.co/facebook/sam-3d-objects)，登录 Hugging Face，申请模型访问权限并接受许可证。任一访问申请未通过时，对应 checkpoint 下载会返回 401 或 403。
 
 ## 初始化香港 ECS
 
@@ -177,20 +190,21 @@ git rev-parse HEAD
 
 ## 推荐：一键完成香港 ECS 动作
 
-以下一条命令会完成香港 ECS 上的全部动作，包括系统工具和 Docker/Buildx 安装、Hugging Face Access Token 验证、离线资源准备与完整性检查、深圳 OSS 上传、镜像构建、深圳 ACR 登录与推送，以及远程 Manifest 门禁：
+以下一条命令会完成项目级部署：安装香港 ECS 工具、验证两项 Hugging Face 权限、准备并校验离线资源、上传深圳 OSS、构建并推送两张镜像、检查远程 Manifest、幂等创建或更新两个 FC GPU 函数、配置 Initializer 与匿名 HTTP 触发器，并等待默认各 1 个预留实例完成模型预热：
 
 ```bash
 cd /root/AliSam3DObjectDocker
 ./scripts/deploy_from_hk.sh
 ```
 
-脚本会依次询问三项非敏感信息：
+脚本会依次询问这些非敏感信息：
 
 - 深圳 OSS Bucket 名。
 - 深圳 ACR 完整公网仓库地址，格式为 `域名/namespace/repository`，不含协议和 tag。
 - ACR 登录用户名。
+- 两个函数使用的 FC 执行角色 ARN。
 
-需要主 checkpoint 时，脚本会隐藏提示输入 Hugging Face Access Token，并先验证 Token 身份以及 `facebook/sam-3d-objects` 模型权限。Token 不会作为命令行参数，也不会写入 Hugging Face 本地登录文件。OSS AccessKey Secret、STS Token 和 ACR 密码同样使用隐藏输入。所有敏感值都不会写入 Git、镜像、部署结果或 Shell 历史；ACR 登录使用随脚本退出删除的临时 Docker 配置目录，交互输入的 OSS 凭证只存在于脚本进程。
+需要 checkpoint 时，脚本会隐藏提示输入 Hugging Face Access Token，并验证 Token 身份以及 `facebook/sam3`、`facebook/sam-3d-objects` 两项权限。Token 不会作为命令行参数，也不会写入 Hugging Face 本地登录文件。OSS AccessKey Secret、STS Token 和 ACR 密码同样使用隐藏输入。所有敏感值都不会写入 Git、镜像、部署结果或 Shell 历史；ACR 登录使用随脚本退出删除的临时 Docker 配置目录，交互输入的 OSS 凭证只存在于脚本进程。
 
 正式执行前可以先查看完整计划：
 
@@ -199,7 +213,8 @@ cd /root/AliSam3DObjectDocker
   --dry-run \
   --oss-bucket 'your-shenzhen-bucket' \
   --acr-image 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject' \
-  --acr-username 'your-acr-user'
+  --acr-username 'your-acr-user' \
+  --fc-role-arn 'acs:ram::1234567890123456:role/your-fc-role'
 ```
 
 脚本始终在当前 SSH 终端前台连续执行，不会创建、切换或接管其他终端会话。执行期间需要保持 SSH 连接；如果连接中断，重新运行同一命令即可复用已下载文件、OSS 断点、Buildx 缓存和已推送镜像层。
@@ -218,16 +233,19 @@ export HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET ACR_PASSWORD
   --yes \
   --oss-bucket 'your-shenzhen-bucket' \
   --acr-image 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject' \
-  --acr-username 'your-acr-user'
+  --acr-username 'your-acr-user' \
+  --fc-role-arn 'acs:ram::1234567890123456:role/your-fc-role'
 
 unset HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN ACR_PASSWORD
 ```
 
-使用 STS 时，还需在运行前设置 `OSS_SESSION_TOKEN`。若主 checkpoint 已经存在，可以增加 `--sam3d-source /实际路径/checkpoints`，脚本将校验并复用该目录。
+使用 STS 时，还需在运行前设置 `OSS_SESSION_TOKEN` 和默认凭证链所需的安全令牌。若 checkpoint 已经存在，可以增加 `--sam3d-source /实际路径/checkpoints --sam3-source /实际路径/sam3.pt`，脚本将校验并复用这两项资源。
 
 脚本要求当前 Git checkout 没有已修改或未跟踪文件，避免把无法追溯的内容带入构建上下文。它可以安全重跑：中断的 Hugging Face 主模型下载会继续补齐，离线文件通过固定大小和 SHA-256 复用，OSS 使用内容哈希版本前缀和断点目录，Buildx 使用层缓存，`docker push` 复用已经上传的层。同一 Git 标签若已指向完全相同的镜像会跳过推送；若指向不同镜像，脚本会拒绝覆盖，避免静默改写 FC 已使用的版本。
 
-成功后会生成仅含非敏感值的 `/root/sam3d-transfer/deployment-result.env`，其中包括完整镜像地址、OSS Bucket 子目录、FC 挂载目录和端口。脚本不会修改 FC；拿到结果后继续执行本手册的“创建深圳 FC GPU 函数”部分。
+成功后会生成仅含非敏感值的 `/root/sam3d-transfer/deployment-result.env` 和 FC 部署结果 JSON，其中包括两张完整镜像地址、OSS 版本前缀、两个函数名、预留实例状态与两个 HTTP 触发器 URL。把两个 URL 填入 `test-client.html` 顶部对应输入框即可联调。
+
+若只想准备 OSS 与镜像，可显式使用 `--skip-configure-fc`。这会跳过函数创建、Initializer 和预留实例等待，不属于默认的一键部署路径。
 
 后面的香港 ECS 分步命令保留为审计和故障排查路径。正常部署优先使用一键脚本。
 
@@ -258,6 +276,7 @@ export TRANSFER_ROOT='/root/sam3d-transfer'
 
 python3 scripts/prepare_offline_assets.py \
   --download-sam3d \
+  --download-sam3 \
   --transfer-root "$TRANSFER_ROOT"
 ```
 
@@ -266,12 +285,14 @@ python3 scripts/prepare_offline_assets.py \
 ```bash
 python3 scripts/prepare_offline_assets.py \
   --sam3d-source /实际路径/checkpoints \
+  --sam3-source /实际路径/sam3.pt \
   --transfer-root "$TRANSFER_ROOT"
 ```
 
 脚本会完成这些工作：
 
 - 下载固定 revision 的 SAM 3D Objects 主 checkpoint。
+- 下载并校验固定 revision 的 SAM 3 `sam3.pt`。
 - 下载并校验 DINOv2 源码和权重。
 - 下载并校验 MoGe `model.pt`。
 - 把 `pipeline.yaml` 里的 MoGe 仓库名换成 `/mnt/nas/sam3d/hf/moge/model.pt`。
@@ -289,6 +310,7 @@ python3 scripts/prepare_offline_assets.py \
 
 du -sh "$TRANSFER_ROOT/storage"
 test -f "$TRANSFER_ROOT/storage/offline-assets.sha256"
+test -f "$TRANSFER_ROOT/storage/sam3/sam3.pt"
 test -f "$TRANSFER_ROOT/storage/hf/pipeline.yaml"
 test -f "$TRANSFER_ROOT/storage/hf/moge/model.pt"
 test -f "$TRANSFER_ROOT/storage/cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth"
@@ -500,29 +522,33 @@ docker manifest inspect --verbose "$REMOTE_IMAGE"
 
 只有远程结果包含 `linux/amd64` 且不包含 `unknown/unknown`，才能把该标签配置到 FC。检查失败时用正确参数重新构建，并推送一个新标签，不要覆盖已经被 FC 引用的标签。
 
-## 创建深圳 FC GPU 函数
+## 审计路径：两个深圳 FC GPU 函数的最终配置
 
-在函数计算控制台切换到华南 1（深圳），创建 GPU 函数，运行时选择自定义容器。控制台字段可能调整名称，值按下表填写：
+正常部署由脚本写入并回验以下配置。只有排查 SDK 或权限问题时才需要在控制台对照，不应把它作为常规手工步骤。
 
 | 配置项 | 值 |
 | --- | --- |
-| 镜像 | 刚推送的完整 `REMOTE_IMAGE`，使用不可变标签 |
+| 函数 | `sam3-segmenter` 与 `sam3d-generator` 两个独立函数 |
+| 镜像 | 分别使用 `Dockerfile.segmenter` 与 `Dockerfile` 推送的不可变标签 |
 | 镜像架构 | `linux/amd64` |
 | GPU 规格 | `fc.gpu.ada.1`，48 GB GPU 显存 |
 | vCPU / 实例内存 | 稳定性优先使用 8 vCPU / 64 GB；验证峰值后可评估 32 GB |
 | CAPort / 监听端口 | `9000` |
-| Command | 留空，使用镜像 `CMD` |
+| 容器 Command | 留空，使用镜像 `CMD` |
 | Args | 留空 |
 | 单实例并发 | `1` |
 | 函数超时 | 首次验证建议 `1800` 秒，稳定后按实测调整 |
 | 临时磁盘 | 模型不放临时盘；如控制台提供规格选择，使用 10 GB 即可 |
 | 公网访问 | 运行时不需要访问 Hugging Face、GitHub 或 DINO 下载站 |
+| Initializer 命令 | `/bin/sh /srv/scripts/fc_initializer.sh` |
+| Initializer 超时 | `300` 秒，平台硬上限 |
+| 预留实例 | 两个函数默认各 `1` 个，且持续分配 CPU/GPU |
 
-在 FC 控制台进入“函数管理 > 函数列表”，把地域切换到华南 1（深圳），单击“创建函数”，选择 GPU 函数和弹性实例。函数代码选择“自定义镜像 > 使用 ACR 中的镜像”，再选择刚推送的不可变标签。不要把旧的 `unknown/unknown` 标签重新选回来。
+两个函数都挂载同一份只读 OSS 资源，但运行时彼此独立：SAM 3 使用 Python 3.12、PyTorch cu126；SAM 3D 使用 Python 3.11、PyTorch cu121。不要把两张镜像或两个模型强行合并，否则会同时遇到依赖冲突、镜像大小和显存峰值风险。
 
 FC `fc.gpu.ada.1` 会给单个容器一张 48 GB 显存的 GPU。实例内存和 GPU 显存不是同一个配置。模型、源码和权重放在 OSS 挂载中，不占用临时磁盘；临时磁盘只保存单次请求产生的 PLY 或 GLB，响应结束后会清理。
 
-不要开启 FC 的实例预热回调。FC Initializer 的最长运行时间是 300 秒，而这个模型的实际初始化可能超过 10 分钟。本项目通过 `/initialize` 或第一次 `/generate` 加载模型。
+必须开启 Initializer 生命周期回调。两张镜像中的脚本会同步调用容器内 `/initialize`，成功加载后才以状态码 0 退出；任何失败都会成为 FC 实例初始化错误。业务端的 `/segment` 与 `/generate` 未预热时只返回 503，绝不临时加载模型。
 
 ### 配置 OSS 挂载
 
@@ -570,6 +596,7 @@ FC 会用执行角色的临时凭证完成挂载。不要把 OSS AccessKey 放�
 
 ```text
 /mnt/nas/sam3d/offline-assets.sha256
+/mnt/nas/sam3d/sam3/sam3.pt
 /mnt/nas/sam3d/hf/pipeline.yaml
 /mnt/nas/sam3d/hf/moge/model.pt
 /mnt/nas/sam3d/cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth
@@ -603,6 +630,20 @@ PORT=9000
 KEEP_ALIVE_TIMEOUT=900
 ```
 
+SAM 3 分割函数额外使用：
+
+```text
+SAM3_ROOT=/opt/sam3
+SAM3_CHECKPOINT_PATH=/mnt/nas/sam3d/sam3/sam3.pt
+SAM3_MAX_UPLOAD_MB=20
+SAM3_MAX_IMAGE_PIXELS=40000000
+SAM3_MAX_POINTS=64
+CORS_ALLOW_ORIGINS=*
+FC_INITIALIZER_HTTP_TIMEOUT=295
+```
+
+SAM 3D 生成函数也使用 `CORS_ALLOW_ORIGINS` 与 `FC_INITIALIZER_HTTP_TIMEOUT`。`*` 便于匿名演示页面直连；生产环境应改成实际静态站点 Origin 列表。
+
 不要设置 `SAM3D_DINOV2_REPO`，服务会根据 `TORCH_HOME` 自动生成正确的本地目录。
 
 `KEEP_ALIVE_TIMEOUT` 是 Uvicorn 的 HTTP Keep-Alive 设置，不是 FC 函数执行超时。函数超时需要在 FC 资源配置中单独设置。
@@ -614,62 +655,70 @@ KEEP_ALIVE_TIMEOUT=900
 建议允许的方法：
 
 ```text
-GET, POST
+GET, POST, OPTIONS
 ```
 
-浏览器跨域联调时，在触发器的 CORS 配置中单独设置允许的 Origin、方法和请求头。不要把 `OPTIONS` 加进 `allowMethods`，FC 网关会处理预检请求。生产环境不要使用 `*` Origin 配合凭证。
+脚本显式允许 `OPTIONS`，由容器内 FastAPI CORS 中间件回答浏览器预检。匿名演示默认使用 `CORS_ALLOW_ORIGINS=*` 且不携带凭证；生产环境应改成实际站点 Origin，并在 API 网关或可信服务端增加鉴权、配额和限流。
 
 HTTP 同步请求体上限为 32 MB。项目把图片和 Mask 的合计上限设为 30 MB，给 multipart 元数据留出空间。
 
 ### 配置弹性策略
 
 - 单实例并发保持 `1`，避免同一 GPU 同时加载或执行多份推理。
-- 联调和低延迟生产环境建议先保留 1 个最小实例或常驻实例。
-- 成本优先时可以把最小实例数设为 0，但缩容后下一次请求会经历冷启动和本地模型加载。
+- 默认给两个函数各保留 1 个预留实例，并设置持续分配 CPU/GPU。`PutProvisionConfig` 后脚本轮询 `GetProvisionConfig`，直到 `current` 达到目标且 `currentError` 为空；这个等待过程会实际触发 Initializer。
+- 成本优先时可以把对应预留实例数设为 0。此时脚本不等待常驻实例，但弹性创建的每个实例仍会先执行 Initializer，再接收请求。
 - 每个扩容实例都会从同一个 OSS 挂载读取模型，不会重新构建镜像，也不会从 Hugging Face 或 GitHub 下载文件。
-- 模型仍需在每个新实例中从 OSS 读入内存和 GPU。这个过程可能需要数分钟，`/initialize` 只会预热实际接到该请求的一个实例，不能一次预热所有未来实例。
-- 当前同步接口适合单实例或低并发验证。生产流量若会扩到多个实例，应让调用方容忍首次加载时延，或改造成把输入和结果放入 OSS 的异步任务接口。
+- FC 会对每个新实例分别执行相同的 Initializer。不要用公网 `/initialize` 请求猜测或挑选实例。
+- 当前 3D 同步接口适合单实例或低并发验证。生产流量若会扩到多个实例，应评估同步超时，必要时改造成把输入和结果放入 OSS 的异步任务接口。
 
-保存配置并发布新函数版本。等待镜像加速状态变为可用后再发送初始化请求。
+脚本回验成功后，两个 HTTP 触发器才可用于业务请求。如果预留实例等待失败，先读取 `currentError` 与函数日志，不要绕过 Initializer 直接调用业务接口。
 
 ## 上线验证
 
-把触发器公网地址保存到变量中，不要在地址末尾加 `/`：
+把脚本输出的两个触发器公网地址保存到变量中，不要在地址末尾加 `/`：
 
 ```bash
-export FC_URL='https://your-function.cn-shenzhen.fcapp.run'
-: "${FC_URL:?请填写 FC HTTP 触发器地址}"
+export SEGMENT_FC_URL='https://your-segmenter.cn-shenzhen.fcapp.run'
+export GENERATE_FC_URL='https://your-generator.cn-shenzhen.fcapp.run'
+: "${SEGMENT_FC_URL:?请填写 SAM 3 分割触发器地址}"
+: "${GENERATE_FC_URL:?请填写 SAM 3D 生成触发器地址}"
 ```
 
-依次检查 HTTP、OSS 挂载和 GPU：
+依次检查两个函数。脚本已经通过预留实例等待验证 Initializer，因此 `/readyz` 此时都应显示模型已加载：
 
 ```bash
-curl -fsS "$FC_URL/healthz" | jq .
-curl -fsS "$FC_URL/readyz" | jq .
-curl -fsS "$FC_URL/gpu" | jq .
+curl -fsS "$SEGMENT_FC_URL/healthz" | jq .
+curl -fsS "$SEGMENT_FC_URL/gpu" | jq .
+curl -fsS "$SEGMENT_FC_URL/readyz" | jq .
+curl -fsS "$GENERATE_FC_URL/healthz" | jq .
+curl -fsS "$GENERATE_FC_URL/gpu" | jq .
+curl -fsS "$GENERATE_FC_URL/readyz" | jq .
 ```
 
-模型初始化前，`/readyz` 应满足：
+SAM 3 分割函数的 `/readyz` 应满足：
 
 ```json
 {
-  "ready": false,
-  "model_loaded": false,
-  "config_present": true,
-  "config_path": "/mnt/nas/sam3d/hf/pipeline.yaml",
+  "ready": true,
+  "model_loaded": true,
+  "checkpoint_present": true,
+  "checkpoint_path": "/mnt/nas/sam3d/sam3/sam3.pt",
   "last_load_error": null
 }
 ```
 
-`config_present` 为 `false` 时不要调用初始化，先修正 OSS Bucket 子目录和本地挂载路径。
-
-主动初始化模型：
+使用原图和一个加选点验证 Mask。点坐标必须在 EXIF 校正后的图片范围内：
 
 ```bash
 curl -fS \
-  --max-time 1800 \
+  --max-time 300 \
   -X POST \
-  "$FC_URL/initialize" | jq .
+  "$SEGMENT_FC_URL/segment" \
+  -F 'image=@image.png' \
+  -F 'points=[{"x":100,"y":100,"label":1}]' \
+  -o mask.png
+
+test -s mask.png
 ```
 
 模型有两个 DINO 条件编码器，因此日志里会出现两次 `Loading DINO model`。新镜像的两次日志都必须包含本地目录和 `source: local`：
@@ -681,21 +730,13 @@ DINO backbone kwargs: {'pretrained': False}
 
 如果仍然显示 `source: github`，FC 正在运行旧镜像或旧 Digest。核对函数版本中的完整镜像标签，并重新发布版本。
 
-初始化完成后再次检查：
-
-```bash
-curl -fsS "$FC_URL/readyz" | jq .
-```
-
-此时 `ready` 和 `model_loaded` 应为 `true`。
-
-使用一张图片和同尺寸 Mask 测试 PLY：
+使用同一张图片和刚返回的 Mask 测试 PLY：
 
 ```bash
 curl -fS \
   --max-time 1800 \
   -X POST \
-  "$FC_URL/generate" \
+  "$GENERATE_FC_URL/generate" \
   -F 'image=@image.png' \
   -F 'mask=@mask.png' \
   -F 'seed=42' \
@@ -754,7 +795,7 @@ FC 更新时把镜像标签和 OSS 前缀作为同一批配置一起发布，避
 - 上一个可用的 ACR 不可变镜像标签。
 - 上一个可用的 OSS 版本化资源前缀。
 
-在 FC 中把镜像和 OSS Bucket 子目录同时改回上一个版本，发布新函数版本，然后按 `/healthz`、`/readyz`、`/gpu`、`/initialize` 的顺序重新验证。回滚不需要重新下载模型、构建镜像或登录实例。
+使用上一组不可变镜像标签和 OSS 版本前缀重新运行配置脚本。等待两个预留实例的 Initializer 成功后，再按 `/healthz`、`/gpu`、`/readyz`、`/segment`、`/generate` 的顺序验证。回滚不需要重新下载模型或手工登录实例。
 
 新版本稳定前，不要删除旧 ACR 标签和旧 OSS 前缀。
 
@@ -783,7 +824,8 @@ FC 运行时不需要 Hugging Face Token、GitHub Token、OSS AccessKey 或 ACR 
 - FC 环境变量启用了 Hugging Face 离线模式。
 - FC OSS 挂载使用深圳内网 Endpoint 和只读执行角色权限。
 - 两次 DINO 日志都显示 `source: local` 和 `pretrained: False`。
-- `/initialize` 成功，`/readyz` 显示模型已加载。
+- 两个预留实例均无 `currentError`，两个 `/readyz` 都显示模型已加载。
+- 点选请求返回同尺寸二值 PNG，3D 请求使用该 Mask 成功返回 PLY 或 GLB。
 - PLY 或 GLB 样例请求成功。
 - 旧镜像标签和旧 OSS 前缀仍保留，可随时回滚。
 

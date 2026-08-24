@@ -27,6 +27,12 @@ def _safe_environment() -> dict[str, str]:
         "ACR_IMAGE",
         "ACR_HOST",
         "ACR_REPOSITORY",
+        "FC_ROLE_ARN",
+        "FC_ACR_IMAGE",
+        "FC_ACR_INSTANCE_ID",
+        "ALIBABA_CLOUD_ACCESS_KEY_ID",
+        "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+        "ALIBABA_CLOUD_SECURITY_TOKEN",
     ):
         environment.pop(name, None)
     environment["NO_COLOR"] = "1"
@@ -55,6 +61,9 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn("--dry-run", result.stdout)
         self.assertIn("--non-interactive", result.stdout)
         self.assertIn("--acr-image", result.stdout)
+        self.assertIn("--skip-configure-fc", result.stdout)
+        self.assertIn("--sam3-source", result.stdout)
+        self.assertIn("--segmenter-provisioned-instances", result.stdout)
         self.assertIn("敏感信息不接受命令行参数", result.stdout)
 
     def test_script_runs_in_foreground_without_tmux_relaunch(self) -> None:
@@ -85,6 +94,8 @@ class HongKongDeployScriptTests(unittest.TestCase):
             [
                 str(SCRIPT),
                 "--dry-run",
+                "--non-interactive",
+                "--yes",
                 "--oss-bucket",
                 "example-bucket",
                 "--acr-image",
@@ -107,7 +118,33 @@ class HongKongDeployScriptTests(unittest.TestCase):
             result.stdout,
         )
         self.assertIn("linux/amd64", result.stdout)
+        self.assertIn("sam3-cu126-", result.stdout)
+        self.assertIn("FC 配置：        启用", result.stdout)
+        self.assertIn("SAM3=1，SAM3D=1", result.stdout)
+        self.assertIn("<正式执行时将交互询问>", result.stdout)
         self.assertIn("dry-run：未执行任何系统或云端修改", result.stdout)
+
+    def test_dry_run_can_explicitly_skip_fc_configuration(self) -> None:
+        result = subprocess.run(
+            [
+                str(SCRIPT),
+                "--dry-run",
+                "--skip-configure-fc",
+                "--oss-bucket",
+                "example-bucket",
+                "--acr-image",
+                "crpi-example.cn-shenzhen.personal.cr.aliyuncs.com/ns/repo",
+                "--acr-username",
+                "example-user",
+            ],
+            cwd=ROOT,
+            env=_safe_environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("已通过 --skip-configure-fc 跳过", result.stdout)
 
     def test_acr_image_rejects_historical_address_pitfalls(self) -> None:
         cases = (
@@ -221,6 +258,8 @@ class HongKongDeployScriptTests(unittest.TestCase):
             '"$OSSUTIL_BIN" cp -u -r',
             "--checkpoint-dir",
             "--verify-main-only",
+            "--verify-sam3-only",
+            "sam3/sam3.pt",
             "unknown/unknown",
             "远程镜像必须且只能包含 linux/amd64",
             "docker push 连续失败 3 次",
@@ -244,6 +283,26 @@ class HongKongDeployScriptTests(unittest.TestCase):
             self.script,
         )
 
+        segmenter = (ROOT / "Dockerfile.segmenter").read_text(encoding="utf-8")
+        sam3_ref = re.search(r"^ARG SAM3_REF=(\S+)$", segmenter, re.MULTILINE)
+        self.assertIsNotNone(sam3_ref)
+        self.assertIn(f"readonly SAM3_REF='{sam3_ref.group(1)}'", self.script)
+
+    def test_two_images_and_fc_helper_are_in_the_one_command_path(self) -> None:
+        for required in (
+            "Dockerfile.segmenter",
+            'push_one_image_with_retry "$LOCAL_IMAGE" "$REMOTE_IMAGE"',
+            'push_one_image_with_retry "$SEGMENTER_LOCAL_IMAGE" "$SEGMENTER_REMOTE_IMAGE"',
+            'verify_remote_manifest "$REMOTE_IMAGE"',
+            'verify_remote_manifest "$SEGMENTER_REMOTE_IMAGE"',
+            '"$PROJECT_ROOT/scripts/configure_fc.py"',
+            "--segmenter-provisioned-instances",
+            "--generator-provisioned-instances",
+            "FC_DEPLOYMENT_RESULT_FILE",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, self.script)
+
     def test_assets_use_content_addressed_prefix_and_nonsecret_result(self) -> None:
         self.assertIn("storage/offline-assets.sha256", self.script)
         self.assertIn('ASSET_RELEASE="bundle-${digest}"', self.script)
@@ -259,6 +318,9 @@ class HongKongDeployScriptTests(unittest.TestCase):
             "OSS_ACCESS_KEY_SECRET",
             "OSS_SESSION_TOKEN",
             "ACR_PASSWORD",
+            "ALIBABA_CLOUD_ACCESS_KEY_ID",
+            "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+            "ALIBABA_CLOUD_SECURITY_TOKEN",
         ):
             with self.subTest(secret=secret):
                 self.assertNotIn(secret, result_block)

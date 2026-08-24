@@ -167,6 +167,7 @@ FROM ubuntu:22.04 AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         libgl1 \
         libglib2.0-0 \
         libgomp1 \
@@ -176,6 +177,7 @@ COPY --from=builder /opt/micromamba/envs/sam3d-objects /opt/micromamba/envs/sam3
 COPY --from=builder /opt/sam-3d-objects /opt/sam-3d-objects
 
 COPY app /srv/app
+COPY scripts/fc_initializer.sh /srv/scripts/fc_initializer.sh
 
 ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
     CONDA_PREFIX=/opt/micromamba/envs/sam3d-objects \
@@ -201,7 +203,8 @@ ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
     SAM3D_MAX_IMAGE_PIXELS=40000000 \
     SAM3D_TMP_DIR=/tmp/sam3d \
     PORT=9000 \
-    KEEP_ALIVE_TIMEOUT=900
+    KEEP_ALIVE_TIMEOUT=900 \
+    FC_INITIALIZER_HTTP_TIMEOUT=295
 
 WORKDIR /opt/sam-3d-objects
 

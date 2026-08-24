@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -233,6 +235,47 @@ class OfflineAssetPreparationTests(unittest.TestCase):
                     label="test model",
                 )
 
+    def test_sam3_checkpoint_copy_uses_pinned_size_and_sha256(self) -> None:
+        payload = b"small SAM 3 checkpoint fixture"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pt"
+            destination = root / "storage" / "sam3" / "sam3.pt"
+            source.write_bytes(payload)
+            with (
+                mock.patch.object(offline_assets, "SAM3_WEIGHT_SIZE", len(payload)),
+                mock.patch.object(
+                    offline_assets,
+                    "SAM3_WEIGHT_SHA256",
+                    hashlib.sha256(payload).hexdigest(),
+                ),
+            ):
+                offline_assets.copy_sam3_checkpoint(source, destination)
+                offline_assets.verify_sam3_checkpoint(destination)
+            self.assertEqual(destination.read_bytes(), payload)
+
+    def test_sam3_checkpoint_rejects_truncation_and_destination_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            truncated = root / "sam3.pt"
+            truncated.write_bytes(b"git-lfs pointer")
+            with self.assertRaisesRegex(offline_assets.AssetError, "size mismatch"):
+                offline_assets.verify_sam3_checkpoint(truncated)
+
+            destination = root / "destination.pt"
+            destination.symlink_to(root / "missing-target.pt")
+            payload = truncated.read_bytes()
+            with (
+                mock.patch.object(offline_assets, "SAM3_WEIGHT_SIZE", len(payload)),
+                mock.patch.object(
+                    offline_assets,
+                    "SAM3_WEIGHT_SHA256",
+                    hashlib.sha256(payload).hexdigest(),
+                ),
+                self.assertRaisesRegex(offline_assets.AssetError, "symlink"),
+            ):
+                offline_assets.copy_sam3_checkpoint(truncated, destination)
+
     def test_checksum_manifest_detects_transfer_corruption(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             storage = Path(directory)
@@ -257,6 +300,9 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("--verify-only", help_result.stdout)
         self.assertIn("--verify-main-only", help_result.stdout)
+        self.assertIn("--verify-sam3-only", help_result.stdout)
+        self.assertIn("--download-sam3", help_result.stdout)
+        self.assertIn("--sam3-source", help_result.stdout)
 
         with tempfile.TemporaryDirectory() as directory:
             verify_result = subprocess.run(
