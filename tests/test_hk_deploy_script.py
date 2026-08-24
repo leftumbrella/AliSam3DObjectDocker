@@ -24,6 +24,9 @@ def _safe_environment() -> dict[str, str]:
         "OSS_ACCESS_KEY_SECRET",
         "OSS_SESSION_TOKEN",
         "ACR_PASSWORD",
+        "ACR_IMAGE",
+        "ACR_HOST",
+        "ACR_REPOSITORY",
     ):
         environment.pop(name, None)
     environment["NO_COLOR"] = "1"
@@ -51,6 +54,7 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--dry-run", result.stdout)
         self.assertIn("--non-interactive", result.stdout)
+        self.assertIn("--acr-image", result.stdout)
         self.assertIn("敏感信息不接受命令行参数", result.stdout)
 
     def test_dry_run_renders_the_full_plan_without_root_or_linux(self) -> None:
@@ -60,10 +64,8 @@ class HongKongDeployScriptTests(unittest.TestCase):
                 "--dry-run",
                 "--oss-bucket",
                 "example-bucket",
-                "--acr-host",
-                "crpi-example.cn-shenzhen.personal.cr.aliyuncs.com",
-                "--acr-repository",
-                "namespace/sam3dobject",
+                "--acr-image",
+                "crpi-example.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject",
                 "--acr-username",
                 "example-user",
             ],
@@ -76,21 +78,90 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("执行计划", result.stdout)
         self.assertIn("example-bucket", result.stdout)
+        self.assertIn(
+            "crpi-example.cn-shenzhen.personal.cr.aliyuncs.com/namespace/"
+            "sam3dobject:cu121-",
+            result.stdout,
+        )
         self.assertIn("linux/amd64", result.stdout)
         self.assertIn("dry-run：未执行任何系统或云端修改", result.stdout)
 
-    def test_unknown_and_secret_shaped_options_are_rejected_before_actions(self) -> None:
+    def test_acr_image_rejects_historical_address_pitfalls(self) -> None:
+        cases = (
+            (
+                "https://crpi-example.cn-shenzhen.personal.cr.aliyuncs.com/ns/repo",
+                "ACR_IMAGE 必须是域名/namespace/repository",
+            ),
+            (
+                "crpi-example-vpc.cn-shenzhen.personal.cr.aliyuncs.com/ns/repo",
+                "不能使用 -vpc 或 -internal",
+            ),
+            (
+                "crpi-example.cn-shenzhen.personal.cr.aliyuncs.com/ns/repo:latest",
+                "不能包含协议、tag、命令或多余路径",
+            ),
+            (
+                "crpi-example.cn-hongkong.personal.cr.aliyuncs.com/ns/repo",
+                "必须是深圳地域地址",
+            ),
+        )
+        for acr_image, expected_error in cases:
+            with self.subTest(acr_image=acr_image):
+                result = subprocess.run(
+                    [
+                        str(SCRIPT),
+                        "--dry-run",
+                        "--oss-bucket",
+                        "example-bucket",
+                        "--acr-image",
+                        acr_image,
+                        "--acr-username",
+                        "example-user",
+                    ],
+                    cwd=ROOT,
+                    env=_safe_environment(),
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_non_interactive_mode_requires_the_complete_acr_image(self) -> None:
         result = subprocess.run(
-            [str(SCRIPT), "--acr-password", "not-a-real-secret", "--dry-run"],
+            [
+                str(SCRIPT),
+                "--dry-run",
+                "--non-interactive",
+                "--yes",
+                "--oss-bucket",
+                "example-bucket",
+                "--acr-username",
+                "example-user",
+            ],
             cwd=ROOT,
             env=_safe_environment(),
             text=True,
             capture_output=True,
             check=False,
         )
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("未知选项：--acr-password", result.stderr)
-        self.assertNotIn("not-a-real-secret", result.stderr)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("无交互模式缺少： ACR_IMAGE", result.stderr)
+
+    def test_unknown_and_secret_shaped_options_are_rejected_before_actions(self) -> None:
+        for option in ("--acr-password", "--hf-token"):
+            with self.subTest(option=option):
+                result = subprocess.run(
+                    [str(SCRIPT), option, "not-a-real-secret", "--dry-run"],
+                    cwd=ROOT,
+                    env=_safe_environment(),
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(f"未知选项：{option}", result.stderr)
+                self.assertNotIn("not-a-real-secret", result.stderr)
 
     def test_credentials_are_not_passed_as_cli_arguments_or_traced(self) -> None:
         self.assertIn("set +x", self.script)
@@ -98,8 +169,16 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn('export DOCKER_CONFIG="$TEMP_DIR/docker-config"', self.script)
         self.assertIn("read -r -s -p 'ACR Registry password", self.script)
         self.assertIn("read -r -s -p 'OSS AccessKey Secret", self.script)
+        self.assertIn("read -r -s -p 'Hugging Face Access Token", self.script)
+        self.assertIn('token=os.environ["HF_TOKEN"]', self.script)
+        self.assertIn("深圳 ACR 完整公网仓库地址", self.script)
         self.assertNotIn("--acr-password)", self.script)
+        self.assertNotIn("--acr-host HOST", self.script)
+        self.assertNotIn("--acr-repository PATH", self.script)
+        self.assertNotIn("ACR_REPOSITORY=", self.script)
+        self.assertNotIn('"$HF_BIN" auth login', self.script)
         self.assertNotIn('auth login --token "$HF_TOKEN"', self.script)
+        self.assertNotIn("HF_LOGIN_CREATED", self.script)
         self.assertIn(
             "unset ACR_PASSWORD HF_TOKEN OSS_ACCESS_KEY_ID",
             self.script,
@@ -160,6 +239,9 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn("./scripts/deploy_from_hk.sh", self.deployment)
         self.assertIn("deployment-result.env", self.deployment)
         self.assertIn("--dry-run", self.deployment)
+        self.assertIn("--acr-image", self.deployment)
+        self.assertIn("read -rp '深圳 ACR 完整公网仓库地址", self.deployment)
+        self.assertNotIn("--acr-host 'crpi-xxxx", self.deployment)
 
 
 if __name__ == "__main__":

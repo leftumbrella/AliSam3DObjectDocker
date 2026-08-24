@@ -294,12 +294,15 @@ class OfflineAssetPreparationTests(unittest.TestCase):
     def test_documented_fc_offline_contract(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        preparer = SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("scripts/prepare_offline_assets.py", readme)
         self.assertIn("/mnt/nas/sam3d/hf/moge/model.pt", readme)
         self.assertIn("facebookresearch_dinov2_main", readme)
         self.assertIn("HF_HUB_OFFLINE=1", readme)
         self.assertIn("HF_HUB_OFFLINE=1", env_example)
+        self.assertNotIn("hf auth login", preparer)
+        self.assertIn("HF_TOKEN", preparer)
 
 
 if __name__ == "__main__":

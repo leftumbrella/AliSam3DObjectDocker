@@ -186,21 +186,20 @@ git rev-parse HEAD
 
 ## 推荐：一键完成香港 ECS 动作
 
-以下一条命令会完成香港 ECS 上的全部动作，包括系统工具和 Docker/Buildx 安装、Hugging Face 登录、离线资源准备与完整性检查、深圳 OSS 上传、镜像构建、深圳 ACR 登录与推送，以及远程 Manifest 门禁：
+以下一条命令会完成香港 ECS 上的全部动作，包括系统工具和 Docker/Buildx 安装、Hugging Face Access Token 验证、离线资源准备与完整性检查、深圳 OSS 上传、镜像构建、深圳 ACR 登录与推送，以及远程 Manifest 门禁：
 
 ```bash
 cd /root/AliSam3DObjectDocker
 ./scripts/deploy_from_hk.sh
 ```
 
-脚本会依次询问四项非敏感信息：
+脚本会依次询问三项非敏感信息：
 
 - 深圳 OSS Bucket 名。
-- 深圳 ACR 公网域名。
-- ACR `namespace/repository`。
+- 深圳 ACR 完整公网仓库地址，格式为 `域名/namespace/repository`，不含协议和 tag。
 - ACR 登录用户名。
 
-需要凭证时，脚本会调用 Hugging Face 官方登录流程，并隐藏读取 OSS AccessKey Secret、STS Token 和 ACR 密码。敏感值不接受命令行参数，不会写入 Git、镜像、部署结果或 Shell 历史。脚本创建的 Hugging Face 登录会在使用后退出，ACR 登录使用随脚本退出删除的临时 Docker 配置目录；交互输入的 OSS 凭证只存在于脚本进程。
+需要主 checkpoint 时，脚本会隐藏提示输入 Hugging Face Access Token，并先验证 Token 身份以及 `facebook/sam-3d-objects` 模型权限。Token 不会作为命令行参数，也不会写入 Hugging Face 本地登录文件。OSS AccessKey Secret、STS Token 和 ACR 密码同样使用隐藏输入。所有敏感值都不会写入 Git、镜像、部署结果或 Shell 历史；ACR 登录使用随脚本退出删除的临时 Docker 配置目录，交互输入的 OSS 凭证只存在于脚本进程。
 
 正式执行前可以先查看完整计划：
 
@@ -208,8 +207,7 @@ cd /root/AliSam3DObjectDocker
 ./scripts/deploy_from_hk.sh \
   --dry-run \
   --oss-bucket 'your-shenzhen-bucket' \
-  --acr-host 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com' \
-  --acr-repository 'namespace/sam3dobject' \
+  --acr-image 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject' \
   --acr-username 'your-acr-user'
 ```
 
@@ -220,7 +218,7 @@ cd /root/AliSam3DObjectDocker
 ```bash
 tmux new -s sam3d-deploy
 
-read -rsp 'HF read token: ' HF_TOKEN && printf '\n'
+read -rsp 'Hugging Face Access Token: ' HF_TOKEN && printf '\n'
 read -rsp 'OSS AccessKey ID: ' OSS_ACCESS_KEY_ID && printf '\n'
 read -rsp 'OSS AccessKey Secret: ' OSS_ACCESS_KEY_SECRET && printf '\n'
 read -rsp 'ACR Registry password: ' ACR_PASSWORD && printf '\n'
@@ -231,8 +229,7 @@ export HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET ACR_PASSWORD
   --yes \
   --no-tmux \
   --oss-bucket 'your-shenzhen-bucket' \
-  --acr-host 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com' \
-  --acr-repository 'namespace/sam3dobject' \
+  --acr-image 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject' \
   --acr-username 'your-acr-user'
 
 unset HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN ACR_PASSWORD
@@ -256,11 +253,13 @@ python3 -m venv /opt/sam3d-tools
 export PATH="/opt/sam3d-tools/bin:$PATH"
 
 hf version
-hf auth login
+
+read -rsp 'Hugging Face Access Token: ' HF_TOKEN && printf '\n'
+export HF_TOKEN
 hf auth whoami
 ```
 
-登录时在交互提示里完成浏览器授权或粘贴只读 Token。不要把 Token 直接写在命令行里，命令行参数可能进入 shell 历史和进程列表。
+在隐藏提示中粘贴具有模型读取权限的 Access Token。不要把 Token 直接写在命令行参数里，命令行参数可能进入 shell 历史和进程列表。资源准备和校验完成后执行 `unset HF_TOKEN`。
 
 第一次准备资源：
 
@@ -403,35 +402,41 @@ ossutil ls "oss://${OSS_BUCKET}/${OSS_PREFIX}/cache/torch/hub/facebookresearch_d
 
 ## 构建 FC 镜像
 
-先设置镜像变量。ACR Host 必须从深圳 ACR 控制台复制公网地址：
+先输入镜像变量。完整仓库地址必须从深圳 ACR 控制台复制公网地址，并且不含协议和 tag：
 
 ```bash
 cd /root/AliSam3DObjectDocker
 
-export ACR_HOST=''
-export ACR_REPOSITORY=''
-export ACR_USERNAME=''
+read -rp '深圳 ACR 完整公网仓库地址（域名/namespace/repository）: ' ACR_IMAGE
+read -rp 'ACR 登录用户名: ' ACR_USERNAME
+
+if [[ "$ACR_IMAGE" =~ ^([A-Za-z0-9.-]+)/([a-z0-9._-]+)/([a-z0-9._-]+)$ ]]; then
+  export ACR_HOST="${BASH_REMATCH[1]}"
+else
+  printf 'ACR 仓库地址格式错误\n' >&2
+  exit 1
+fi
+[[ "$ACR_HOST" == *'.aliyuncs.com' && "$ACR_HOST" == *'cn-shenzhen'* ]] || exit 1
+[[ "$ACR_HOST" != *'-vpc'* && "$ACR_HOST" != *'-internal'* ]] || exit 1
+[[ -n "$ACR_USERNAME" ]] || exit 1
+
+export ACR_IMAGE ACR_USERNAME
 export IMAGE_TAG="cu121-$(git rev-parse --short=12 HEAD)"
 export LOCAL_IMAGE="sam3d-fc:${IMAGE_TAG}"
-
-: "${ACR_HOST:?请填写深圳 ACR 公网地址}"
-: "${ACR_REPOSITORY:?请填写 namespace/repository}"
-: "${ACR_USERNAME:?请填写 ACR 登录用户名}"
-
-export REMOTE_IMAGE="${ACR_HOST}/${ACR_REPOSITORY}:${IMAGE_TAG}"
+export REMOTE_IMAGE="${ACR_IMAGE}:${IMAGE_TAG}"
 printf 'Local image:  %s\nRemote image: %s\n' "$LOCAL_IMAGE" "$REMOTE_IMAGE"
 ```
 
-香港 ECS 的 `ACR_HOST` 示例格式为：
+香港 ECS 的完整 ACR 仓库地址示例格式为：
 
 ```text
-crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com
+crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject
 ```
 
 不要填成：
 
 ```text
-crpi-xxxx-vpc.cn-shenzhen.personal.cr.aliyuncs.com
+crpi-xxxx-vpc.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject
 ```
 
 使用本地 `--load` 构建。镜像先保留在香港 ECS，后续即使 ACR 推送中断，也只需重跑 `docker push`，不用重新编译 PyTorch3D 和 gsplat：

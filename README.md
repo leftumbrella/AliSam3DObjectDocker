@@ -77,20 +77,24 @@ Uvicorn 固定使用一个 worker，服务内部也使用异步锁串行执行 G
 
 ## 1. 在香港服务器准备完整离线资源
 
-深圳 FC 不需要、也不应该在弹性扩容时临时下载模型。先在能访问 Hugging Face、GitHub 和 Meta 下载站点的香港 Linux 服务器上一次性准备完整资源，再上传到深圳 OSS。先在 [SAM 3D Objects 模型页面](https://huggingface.co/facebook/sam-3d-objects)申请权限并登录：
+深圳 FC 不需要、也不应该在弹性扩容时临时下载模型。先在能访问 Hugging Face、GitHub 和 Meta 下载站点的香港 Linux 服务器上一次性准备完整资源，再上传到深圳 OSS。先在 [SAM 3D Objects 模型页面](https://huggingface.co/facebook/sam-3d-objects)申请权限，并准备具有读取权限的 Access Token：
 
 ```bash
-hf auth login
+read -rsp 'Hugging Face Access Token: ' HF_TOKEN && printf '\n'
+export HF_TOKEN
+hf auth whoami
 cd ~/AliSam3DObjectDocker
 
 python3 scripts/prepare_offline_assets.py \
   --download-sam3d \
   --transfer-root /root/sam3d-transfer
+
+unset HF_TOKEN
 ```
 
 脚本会完成以下操作：
 
-- 使用当前 `hf` 登录凭证下载固定 revision `2e73555018d2741ccd486e56c24fac41155a1dc6` 的受限主 checkpoint；Token 只保留在香港服务器，不会进入资源包、镜像或 Git。
+- 使用隐藏输入的 `HF_TOKEN` 下载固定 revision `2e73555018d2741ccd486e56c24fac41155a1dc6` 的受限主 checkpoint；Token 不进入命令行参数、资源包、镜像或 Git。
 - 下载固定版本的 DINOv2 源码与 `dinov2_vitl14_reg4_pretrain.pth`，并检查 Git commit、文件大小和 SHA-256。
 - 下载固定版本的 MoGe `model.pt`，检查文件大小和 SHA-256。
 - 把 `pipeline.yaml` 中的 `Ruicheng/moge-vitl` 替换为容器内路径 `/mnt/nas/sam3d/hf/moge/model.pt`。原配置只备份到 `/root/sam3d-transfer/backups/`，不会上传到 OSS。

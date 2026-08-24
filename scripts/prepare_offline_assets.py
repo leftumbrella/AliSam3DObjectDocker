@@ -399,7 +399,10 @@ def copy_checkpoint_tree(source: Path, destination: Path) -> None:
 
 def download_sam3d_checkpoint(download_root: Path) -> Path:
     if shutil.which("hf") is None:
-        raise AssetError("Hugging Face CLI 'hf' is required; install it and run: hf auth login")
+        raise AssetError(
+            "Hugging Face CLI 'hf' and HF_TOKEN are required; "
+            "use scripts/deploy_from_hk.sh or provide HF_TOKEN from a hidden prompt"
+        )
     download_root.mkdir(parents=True, exist_ok=True)
     run(
         [
@@ -603,7 +606,7 @@ def prepare(args: argparse.Namespace) -> None:
         copy_checkpoint_tree(source, checkpoint_destination)
     elif not (checkpoint_destination / "pipeline.yaml").is_file():
         raise AssetError(
-            "pipeline.yaml is unavailable; use --download-sam3d after 'hf auth login', "
+            "pipeline.yaml is unavailable; use --download-sam3d with HF_TOKEN, "
             "or pass --sam3d-source /path/to/checkpoints"
         )
 

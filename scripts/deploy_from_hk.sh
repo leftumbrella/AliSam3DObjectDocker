@@ -23,9 +23,9 @@ readonly FC_IMAGE_LIMIT_BYTES=$((15 * 1024 * 1024 * 1024))
 TRANSFER_ROOT="${TRANSFER_ROOT:-/root/sam3d-transfer}"
 SAM3D_SOURCE="${SAM3D_SOURCE:-}"
 OSS_BUCKET="${OSS_BUCKET:-}"
-ACR_HOST="${ACR_HOST:-}"
-ACR_REPOSITORY="${ACR_REPOSITORY:-}"
+ACR_IMAGE="${ACR_IMAGE:-}"
 ACR_USERNAME="${ACR_USERNAME:-}"
+ACR_HOST=''
 MAX_JOBS="${MAX_JOBS:-2}"
 NVCC_THREADS="${NVCC_THREADS:-2}"
 
@@ -34,7 +34,6 @@ NON_INTERACTIVE=0
 DRY_RUN=0
 NO_TMUX=0
 CURRENT_STEP='启动'
-HF_LOGIN_CREATED=0
 ACR_LOGIN_ACTIVE=0
 OSSUTIL_BIN=''
 HF_BIN=''
@@ -58,8 +57,7 @@ usage() {
 
 必填信息可以通过选项、同名环境变量或交互提示提供：
   --oss-bucket NAME          深圳 OSS Bucket 名
-  --acr-host HOST            深圳 ACR 公网域名，不得使用 -vpc 或 -internal
-  --acr-repository PATH      ACR namespace/repository
+  --acr-image IMAGE          ACR 完整公网仓库地址，不含协议和 tag
   --acr-username USER        ACR 登录用户名
 
 可选：
@@ -74,7 +72,7 @@ usage() {
   -h, --help                 显示帮助
 
 敏感信息不接受命令行参数：
-  HF_TOKEN                   Hugging Face 只读 Token，可不设置并交互登录
+  HF_TOKEN                   Hugging Face Access Token，可不设置并隐藏输入
   OSS_ACCESS_KEY_ID          OSS RAM 用户或 STS AccessKey ID
   OSS_ACCESS_KEY_SECRET      OSS RAM 用户或 STS AccessKey Secret
   OSS_SESSION_TOKEN          使用 STS 时设置，普通 RAM AccessKey 留空
@@ -130,10 +128,6 @@ cleanup() {
   if [[ "$ACR_LOGIN_ACTIVE" -eq 1 && -n "$ACR_HOST" ]] && command -v docker >/dev/null 2>&1; then
     docker logout "$ACR_HOST" >/dev/null 2>&1
   fi
-  if [[ "$HF_LOGIN_CREATED" -eq 1 && -x "$HF_BIN" ]]; then
-    "$HF_BIN" auth logout >/dev/null 2>&1
-  fi
-
   unset ACR_PASSWORD HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
   unset DOCKER_CONFIG
   safe_remove_temp_dirs
@@ -159,14 +153,9 @@ parse_args() {
         OSS_BUCKET=$2
         shift 2
         ;;
-      --acr-host)
+      --acr-image)
         require_option_value "$1" "${2:-}"
-        ACR_HOST=$2
-        shift 2
-        ;;
-      --acr-repository)
-        require_option_value "$1" "${2:-}"
-        ACR_REPOSITORY=$2
+        ACR_IMAGE=$2
         shift 2
         ;;
       --acr-username)
@@ -227,6 +216,7 @@ prompt_value() {
   local variable_name=$1
   local label=$2
   local value=''
+  [[ -t 0 ]] || die "$label 需要交互终端；自动化运行请使用对应选项或环境变量"
   read -r -p "$label: " value
   [[ -n "$value" ]] || die "$label 不能为空"
   printf -v "$variable_name" '%s' "$value"
@@ -235,8 +225,7 @@ prompt_value() {
 collect_required_inputs() {
   local missing=''
   [[ -n "$OSS_BUCKET" ]] || missing="$missing OSS_BUCKET"
-  [[ -n "$ACR_HOST" ]] || missing="$missing ACR_HOST"
-  [[ -n "$ACR_REPOSITORY" ]] || missing="$missing ACR_REPOSITORY"
+  [[ -n "$ACR_IMAGE" ]] || missing="$missing ACR_IMAGE"
   [[ -n "$ACR_USERNAME" ]] || missing="$missing ACR_USERNAME"
 
   if [[ -n "$missing" && "$NON_INTERACTIVE" -eq 1 ]]; then
@@ -244,8 +233,8 @@ collect_required_inputs() {
   fi
 
   [[ -n "$OSS_BUCKET" ]] || prompt_value OSS_BUCKET '深圳 OSS Bucket 名'
-  [[ -n "$ACR_HOST" ]] || prompt_value ACR_HOST '深圳 ACR 公网域名'
-  [[ -n "$ACR_REPOSITORY" ]] || prompt_value ACR_REPOSITORY 'ACR namespace/repository'
+  [[ -n "$ACR_IMAGE" ]] \
+    || prompt_value ACR_IMAGE '深圳 ACR 完整公网仓库地址（域名/namespace/repository，不含 tag）'
   [[ -n "$ACR_USERNAME" ]] || prompt_value ACR_USERNAME 'ACR 登录用户名'
 }
 
@@ -258,27 +247,34 @@ validate_optional_number() {
 
 validate_inputs() {
   local resolved_transfer_root
+  local acr_image_pattern='^([A-Za-z0-9.-]+)/([a-z0-9._-]+)/([a-z0-9._-]+)$'
   [[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] \
     || die 'OSS Bucket 名必须为 3 到 63 位小写字母、数字或连字符'
 
-  [[ "$ACR_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || die 'ACR_HOST 只能是域名，不能包含协议、端口或路径'
+  if [[ "$ACR_IMAGE" =~ $acr_image_pattern ]]; then
+    ACR_HOST=${BASH_REMATCH[1]}
+  else
+    die 'ACR_IMAGE 必须是域名/namespace/repository，不能包含协议、tag、命令或多余路径'
+  fi
+  [[ "$ACR_HOST" =~ ^[A-Za-z0-9.-]+$ ]] \
+    || die 'ACR_HOST 只能是域名，不能包含协议、端口或路径'
   [[ "$ACR_HOST" == *'.aliyuncs.com' ]] || die 'ACR_HOST 必须使用阿里云 Registry 域名'
   [[ "$ACR_HOST" == *'cn-shenzhen'* ]] || die 'ACR_HOST 必须是深圳地域地址'
   [[ "$ACR_HOST" != *'-vpc'* && "$ACR_HOST" != *'-internal'* ]] \
     || die '香港 ECS 必须使用 ACR 公网地址，不能使用 -vpc 或 -internal'
 
-  [[ "$ACR_REPOSITORY" =~ ^[a-z0-9._-]+/[a-z0-9._-]+$ ]] \
-    || die 'ACR_REPOSITORY 必须是小写 namespace/repository'
   [[ ! "$ACR_USERNAME" =~ [[:cntrl:]] ]] || die 'ACR_USERNAME 包含非法控制字符'
 
   [[ "$TRANSFER_ROOT" == /* && "$TRANSFER_ROOT" != '/' ]] \
     || die 'TRANSFER_ROOT 必须是非根目录的绝对路径'
-  resolved_transfer_root="$(realpath -m -- "$TRANSFER_ROOT")"
-  case "$resolved_transfer_root" in
-    "$PROJECT_ROOT"|"$PROJECT_ROOT"/*)
-      die 'TRANSFER_ROOT 不能位于 Git 项目中，否则模型文件会进入 Docker 构建上下文'
-      ;;
-  esac
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    resolved_transfer_root="$(realpath -m -- "$TRANSFER_ROOT")"
+    case "$resolved_transfer_root" in
+      "$PROJECT_ROOT"|"$PROJECT_ROOT"/*)
+        die 'TRANSFER_ROOT 不能位于 Git 项目中，否则模型文件会进入 Docker 构建上下文'
+        ;;
+    esac
+  fi
   if [[ -n "$SAM3D_SOURCE" ]]; then
     [[ "$SAM3D_SOURCE" == /* ]] || die 'SAM3D_SOURCE 必须是绝对路径'
   fi
@@ -296,8 +292,8 @@ resolve_release_values() {
   GIT_COMMIT_SHORT="$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
   IMAGE_TAG="cu121-${GIT_COMMIT_SHORT}"
   LOCAL_IMAGE="sam3d-fc:${IMAGE_TAG}"
-  if [[ -n "$ACR_HOST" && -n "$ACR_REPOSITORY" ]]; then
-    REMOTE_IMAGE="${ACR_HOST}/${ACR_REPOSITORY}:${IMAGE_TAG}"
+  if [[ -n "$ACR_IMAGE" ]]; then
+    REMOTE_IMAGE="${ACR_IMAGE}:${IMAGE_TAG}"
   else
     REMOTE_IMAGE='<等待填写 ACR 信息>'
   fi
@@ -305,8 +301,7 @@ resolve_release_values() {
 
 print_plan() {
   local bucket=${OSS_BUCKET:-'<交互填写>'}
-  local host=${ACR_HOST:-'<交互填写>'}
-  local repository=${ACR_REPOSITORY:-'<交互填写>'}
+  local acr_image=${ACR_IMAGE:-'<交互填写>'}
   local username=${ACR_USERNAME:-'<交互填写>'}
   local source=${SAM3D_SOURCE:-'<由 Hugging Face 下载>'}
 
@@ -320,8 +315,7 @@ print_plan() {
   OSS Bucket：    $bucket
   OSS Endpoint：  $OSS_PUBLIC_ENDPOINT
   OSS 版本前缀：  sam3d/releases/bundle-<离线清单哈希>
-  ACR 公网域名：  $host
-  ACR 仓库：      $repository
+  ACR 完整仓库：  $acr_image
   ACR 用户：      $username
   本地镜像：      $LOCAL_IMAGE
   远程镜像：      $REMOTE_IMAGE
@@ -441,8 +435,7 @@ maybe_relaunch_in_tmux() {
     --yes
     --no-tmux
     --oss-bucket "$OSS_BUCKET"
-    --acr-host "$ACR_HOST"
-    --acr-repository "$ACR_REPOSITORY"
+    --acr-image "$ACR_IMAGE"
     --acr-username "$ACR_USERNAME"
     --transfer-root "$TRANSFER_ROOT"
     --max-jobs "$MAX_JOBS"
@@ -583,29 +576,42 @@ ensure_ossutil() {
 
 ensure_huggingface_access() {
   CURRENT_STEP='验证 Hugging Face 模型权限'
-  if "$HF_BIN" auth whoami >/dev/null 2>&1; then
-    log 'Hugging Face 身份验证成功'
-    return
+  local token=''
+  unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE
+  if [[ -z "${HF_TOKEN:-}" ]]; then
+    [[ "$NON_INTERACTIVE" -eq 0 ]] \
+      || die '无交互模式需要设置有效的 HF_TOKEN，或预先准备完整离线资源'
+    [[ -t 0 ]] || die 'Hugging Face Access Token 输入需要交互终端'
+    read -r -s -p 'Hugging Face Access Token（输入时不会显示）: ' token
+    printf '\n'
+    [[ -n "$token" ]] || die 'Hugging Face Access Token 不能为空'
+    export HF_TOKEN="$token"
+    token=''
+  fi
+  if [[ "$HF_TOKEN" =~ [[:space:]] ]]; then
+    unset HF_TOKEN
+    die 'Hugging Face Access Token 不能包含空白字符'
   fi
 
-  if [[ -n "${HF_TOKEN:-}" ]]; then
-    die 'HF_TOKEN 无效或无权访问模型，请更换只读 Token'
+  if ! "$HF_BIN" auth whoami >/dev/null 2>&1; then
+    unset HF_TOKEN
+    die 'Hugging Face Access Token 无效，或香港 ECS 无法连接 Hugging Face'
   fi
-  [[ "$NON_INTERACTIVE" -eq 0 ]] \
-    || die '无交互模式需要有效的 HF_TOKEN，或预先准备完整离线资源'
-  [[ -t 0 ]] || die 'Hugging Face 登录需要交互终端'
+  if ! "$TOOLS_PYTHON" - <<'PY' >/dev/null 2>&1
+import os
 
-  "$HF_BIN" auth login
-  HF_LOGIN_CREATED=1
-  "$HF_BIN" auth whoami >/dev/null
-}
+from huggingface_hub import HfApi
 
-finish_huggingface_login() {
-  if [[ "$HF_LOGIN_CREATED" -eq 1 ]]; then
-    "$HF_BIN" auth logout >/dev/null
-    HF_LOGIN_CREATED=0
-    log '已移除本次脚本创建的 Hugging Face 本地登录凭证'
+HfApi().model_info(
+    "facebook/sam-3d-objects",
+    token=os.environ["HF_TOKEN"],
+)
+PY
+  then
+    unset HF_TOKEN
+    die '无法访问 facebook/sam-3d-objects；请确认已获批模型权限且香港 ECS 网络正常'
   fi
+  log 'Hugging Face Access Token 验证成功；Token 仅保存在当前脚本进程环境中'
 }
 
 prepare_offline_assets() {
@@ -640,7 +646,6 @@ prepare_offline_assets() {
   "$TOOLS_PYTHON" "$prepare_script" \
     --verify-only \
     --transfer-root "$TRANSFER_ROOT"
-  finish_huggingface_login
   unset HF_TOKEN
 
   local manifest="$TRANSFER_ROOT/storage/offline-assets.sha256"
@@ -915,9 +920,11 @@ EOF
 
 main() {
   parse_args "$@"
-  resolve_release_values
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
+    collect_required_inputs
+    validate_inputs
+    resolve_release_values
     print_plan
     printf '\ndry-run：未执行任何系统或云端修改。\n'
     return
