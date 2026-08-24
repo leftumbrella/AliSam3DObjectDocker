@@ -77,7 +77,7 @@ def create_app(
             return {"torch_installed": False, "cuda_available": False}
 
         cuda_available = torch.cuda.is_available()
-        return {
+        result: dict[str, object] = {
             "torch_installed": True,
             "torch_version": torch.__version__,
             "torch_cuda_version": torch.version.cuda,
@@ -85,6 +85,17 @@ def create_app(
             "device_count": torch.cuda.device_count() if cuda_available else 0,
             "device_name": torch.cuda.get_device_name(0) if cuda_available else None,
         }
+        if cuda_available:
+            free_bytes, total_bytes = torch.cuda.mem_get_info(0)
+            result.update(
+                {
+                    "memory_free_bytes": free_bytes,
+                    "memory_total_bytes": total_bytes,
+                    "memory_allocated_bytes": torch.cuda.memory_allocated(0),
+                    "memory_reserved_bytes": torch.cuda.memory_reserved(0),
+                }
+            )
+        return result
 
     @app.post(
         "/initialize",

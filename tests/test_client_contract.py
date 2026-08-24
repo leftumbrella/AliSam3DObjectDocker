@@ -38,17 +38,13 @@ class BrowserTestClientContractTests(unittest.TestCase):
         cls.parser = _ClientMarkupParser()
         cls.parser.feed(cls.html)
 
-    def test_separate_default_endpoints_and_runtime_routes_are_present(self) -> None:
+    def test_one_default_endpoint_and_both_runtime_routes_are_present(self) -> None:
         self.assertIn(DEFAULT_ENDPOINT, self.html)
-        self.assertIn('const DEFAULT_SEGMENT_ENDPOINT = "";', self.html)
-        self.assertIn(
-            f'const DEFAULT_THREE_D_ENDPOINT = "{DEFAULT_ENDPOINT}";',
-            self.html,
-        )
-        self.assertIn('id="segment-endpoint"', self.html)
-        self.assertIn('id="three-d-endpoint"', self.html)
-        self.assertIn('"sam3d-segment-endpoint"', self.html)
-        self.assertIn('"sam3d-three-d-endpoint"', self.html)
+        self.assertIn(f'const DEFAULT_ENDPOINT = "{DEFAULT_ENDPOINT}";', self.html)
+        self.assertIn('id="service-endpoint"', self.html)
+        self.assertIn('"sam3d-service-endpoint"', self.html)
+        self.assertNotIn('id="segment-endpoint"', self.html)
+        self.assertNotIn('id="three-d-endpoint"', self.html)
         for route in ("/healthz", "/gpu", "/readyz", "/segment", "/generate"):
             with self.subTest(route=route):
                 self.assertIn(f'"{route}"', self.html)
@@ -65,8 +61,6 @@ class BrowserTestClientContractTests(unittest.TestCase):
         positions = [
             function_source.index(call)
             for call in (
-                'apiRequest("segment", "/healthz"',
-                'apiRequest("segment", "/readyz"',
                 'apiRequest("threeD", "/healthz"',
                 'apiRequest("threeD", "/gpu"',
                 'apiRequest("threeD", "/readyz"',

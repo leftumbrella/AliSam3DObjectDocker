@@ -1,5 +1,5 @@
 # SAM 3 image inference runtime. Torch/torchvision and the pinned SAM 3 source
-# checkout are installed separately by Dockerfile.segmenter.
+# checkout are installed separately by the segmenter-builder stage in Dockerfile.
 fastapi==0.116.1
 einops==0.8.1
 ftfy==6.1.1

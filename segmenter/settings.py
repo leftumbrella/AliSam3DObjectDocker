@@ -31,6 +31,7 @@ class Settings:
     max_image_pixels: int
     max_points: int
     cors_allow_origins: tuple[str, ...]
+    gpu_lock_path: Path = Path("/tmp/sam3d-gpu.lock")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -55,5 +56,7 @@ class Settings:
             ),
             max_points=_read_positive_int("SAM3_MAX_POINTS", 64),
             cors_allow_origins=_read_origins("CORS_ALLOW_ORIGINS"),
+            gpu_lock_path=Path(
+                os.getenv("GPU_LOCK_PATH", "/tmp/sam3d-gpu.lock")
+            ),
         )
-

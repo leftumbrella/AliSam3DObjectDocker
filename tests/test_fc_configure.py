@@ -40,10 +40,8 @@ def _config(**overrides):
         "oss_prefix": "sam3d/releases/bundle-deadbeef1234",
         "oss_endpoint": "https://oss-cn-shenzhen-internal.aliyuncs.com",
         "mount_dir": "/mnt/nas/sam3d",
-        "segmenter_function": "sam3-segmenter",
-        "generator_function": "sam3d-generator",
-        "segmenter_image": "registry-vpc.cn-shenzhen.aliyuncs.com/ns/repo:sam3-cu126-deadbeef",
-        "generator_image": "registry-vpc.cn-shenzhen.aliyuncs.com/ns/repo:cu121-deadbeef",
+        "function_name": "sam3d-object",
+        "image": "registry-vpc.cn-shenzhen.aliyuncs.com/ns/repo:sam3-sam3d-deadbeef",
         "trigger_name": "http-trigger",
         "trigger_auth": "anonymous",
         "acr_instance_id": None,
@@ -54,8 +52,8 @@ def _config(**overrides):
         "gpu_type": "fc.gpu.ada.1",
         "gpu_memory_size": 49152,
         "disk_size": 10240,
-        "segmenter_provisioned_instances": 1,
-        "generator_provisioned_instances": 1,
+        "provisioned_instances": 0,
+        "reserved_concurrency": 1,
     }
     values.update(overrides)
     return fc.DeploymentConfig(**values)
@@ -66,12 +64,14 @@ class FakeFCAPI:
         self.functions = {}
         self.triggers = {}
         self.provisions = {}
+        self.concurrency = {}
         self.function_creates = 0
         self.function_updates = 0
         self.trigger_creates = 0
         self.trigger_updates = 0
         self.provision_puts = 0
         self.provision_waits = 0
+        self.concurrency_puts = 0
 
     def get_function(self, name):
         value = self.functions.get(name)
@@ -133,67 +133,75 @@ class FakeFCAPI:
             raise AssertionError("fake provision config is not ready")
         return copy.deepcopy(value)
 
+    def get_concurrency_config(self, function_name):
+        value = self.concurrency.get(function_name)
+        return copy.deepcopy(value) if value is not None else None
+
+    def put_concurrency_config(self, function_name, spec):
+        self.concurrency_puts += 1
+        self.concurrency[function_name] = copy.deepcopy(spec)
+        return copy.deepcopy(spec)
+
 
 class FCConfigureTests(unittest.TestCase):
-    def test_plan_has_two_isolated_images_initializer_mount_trigger_and_provision(self) -> None:
+    def test_plan_has_one_combined_image_initializer_mount_and_single_gpu_limit(self) -> None:
         config = _config()
         plan = fc.build_deployment_plan(config)
 
         self.assertEqual(plan["apiVersion"], "2023-03-30")
-        self.assertEqual(len(plan["functions"]), 2)
-        by_kind = {item["kind"]: item for item in plan["functions"]}
-        self.assertNotEqual(
-            by_kind["segmenter"]["spec"]["customContainerConfig"]["image"],
-            by_kind["generator"]["spec"]["customContainerConfig"]["image"],
-        )
-        for target in by_kind.values():
-            initializer = target["spec"]["instanceLifecycleConfig"]["initializer"]
-            self.assertEqual(
-                initializer["command"],
-                ["/bin/sh", "/srv/scripts/fc_initializer.sh"],
-            )
-            self.assertEqual(initializer["timeout"], 300)
-            mount = target["spec"]["ossMountConfig"]["mountPoints"][0]
-            self.assertTrue(mount["readOnly"])
-            self.assertEqual(mount["mountDir"], "/mnt/nas/sam3d")
-            self.assertEqual(
-                target["provision"],
-                {
-                    "alwaysAllocateCPU": True,
-                    "alwaysAllocateGPU": True,
-                    "defaultTarget": 1,
-                },
-            )
-            trigger = json.loads(target["trigger"]["triggerConfig"])
-            self.assertEqual(trigger["authType"], "anonymous")
-            self.assertEqual(trigger["methods"], ["GET", "POST", "OPTIONS"])
-            self.assertFalse(trigger["disableURLInternet"])
-
-        segmenter_env = by_kind["segmenter"]["spec"]["environmentVariables"]
-        self.assertEqual(segmenter_env["CORS_ALLOW_ORIGINS"], "*")
+        self.assertEqual(len(plan["functions"]), 1)
+        target = plan["functions"][0]
+        self.assertEqual(target["kind"], "unified")
+        self.assertEqual(target["concurrency"], {"reservedConcurrency": 1})
+        initializer = target["spec"]["instanceLifecycleConfig"]["initializer"]
         self.assertEqual(
-            segmenter_env["SAM3_CHECKPOINT_PATH"],
+            initializer["command"],
+            ["/bin/sh", "/srv/scripts/fc_initializer.sh"],
+        )
+        self.assertEqual(initializer["timeout"], 300)
+        self.assertEqual(target["spec"]["instanceConcurrency"], 1)
+        mount = target["spec"]["ossMountConfig"]["mountPoints"][0]
+        self.assertTrue(mount["readOnly"])
+        self.assertEqual(mount["mountDir"], "/mnt/nas/sam3d")
+        self.assertEqual(
+            target["provision"],
+            {
+                "alwaysAllocateCPU": True,
+                "alwaysAllocateGPU": True,
+                "defaultTarget": 0,
+            },
+        )
+        trigger = json.loads(target["trigger"]["triggerConfig"])
+        self.assertEqual(trigger["authType"], "anonymous")
+        self.assertEqual(trigger["methods"], ["GET", "POST", "OPTIONS"])
+        self.assertFalse(trigger["disableURLInternet"])
+
+        environment = target["spec"]["environmentVariables"]
+        self.assertEqual(environment["CORS_ALLOW_ORIGINS"], "*")
+        self.assertEqual(
+            environment["SAM3_CHECKPOINT_PATH"],
             "/mnt/nas/sam3d/sam3/sam3.pt",
         )
-        generator_env = by_kind["generator"]["spec"]["environmentVariables"]
         self.assertEqual(
-            generator_env["SAM3D_CONFIG_PATH"],
+            environment["SAM3D_CONFIG_PATH"],
             "/mnt/nas/sam3d/hf/pipeline.yaml",
         )
+        self.assertEqual(environment["GPU_LOCK_PATH"], "/tmp/sam3d-gpu.lock")
 
-    def test_reconcile_is_idempotent_and_waits_for_both_initializers(self) -> None:
+    def test_reconcile_is_idempotent_and_waits_for_combined_initializer(self) -> None:
         api = FakeFCAPI()
-        config = _config()
+        config = _config(provisioned_instances=1)
 
         first = fc.reconcile_deployment(config, api)
         second = fc.reconcile_deployment(config, api)
 
-        self.assertEqual(api.function_creates, 2)
+        self.assertEqual(api.function_creates, 1)
         self.assertEqual(api.function_updates, 0)
-        self.assertEqual(api.trigger_creates, 2)
+        self.assertEqual(api.trigger_creates, 1)
         self.assertEqual(api.trigger_updates, 0)
-        self.assertEqual(api.provision_puts, 2)
-        self.assertEqual(api.provision_waits, 4)
+        self.assertEqual(api.provision_puts, 1)
+        self.assertEqual(api.provision_waits, 2)
+        self.assertEqual(api.concurrency_puts, 1)
         self.assertTrue(all(item["verified"] for item in first["functions"]))
         self.assertTrue(all(item["provision"]["ready"] for item in first["functions"]))
         self.assertTrue(
@@ -210,34 +218,29 @@ class FCConfigureTests(unittest.TestCase):
         fc.reconcile_deployment(config, api)
         updated = replace(
             config,
-            segmenter_image=(
-                "registry-vpc.cn-shenzhen.aliyuncs.com/ns/repo:sam3-cu126-new"
-            ),
+            image="registry-vpc.cn-shenzhen.aliyuncs.com/ns/repo:sam3-sam3d-new",
         )
 
         result = fc.reconcile_deployment(updated, api)
 
-        segmenter = next(item for item in result["functions"] if item["kind"] == "segmenter")
-        self.assertEqual(segmenter["functionAction"], "updated")
-        self.assertEqual(segmenter["provision"]["action"], "updated")
-        self.assertEqual(api.provision_puts, 3)
+        unified = result["functions"][0]
+        self.assertEqual(unified["functionAction"], "updated")
+        self.assertEqual(unified["provision"]["action"], "updated")
+        self.assertEqual(api.provision_puts, 2)
 
     def test_zero_provision_target_configures_but_skips_warmup_wait(self) -> None:
         api = FakeFCAPI()
-        config = _config(
-            segmenter_provisioned_instances=0,
-            generator_provisioned_instances=0,
-        )
+        config = _config(provisioned_instances=0)
 
         result = fc.reconcile_deployment(config, api)
 
-        self.assertEqual(api.provision_puts, 2)
+        self.assertEqual(api.provision_puts, 1)
         self.assertEqual(api.provision_waits, 0)
         self.assertTrue(
-            all(item["provision"]["waitSkipped"] for item in result["functions"])
+            result["functions"][0]["provision"]["waitSkipped"]
         )
         self.assertTrue(
-            all(not item["provision"]["ready"] for item in result["functions"])
+            not result["functions"][0]["provision"]["ready"]
         )
 
     def test_sdk_adapter_polls_until_current_reaches_target_without_error(self) -> None:
@@ -252,7 +255,7 @@ class FCConfigureTests(unittest.TestCase):
         api.get_provision_config = mock.Mock(side_effect=lambda _name: next(states))
 
         with mock.patch.object(fc.time, "sleep", return_value=None):
-            result = api.wait_provision_config("sam3-segmenter", 1)
+            result = api.wait_provision_config("sam3d-object", 1)
 
         self.assertEqual(result["current"], 1)
         self.assertEqual(result["currentError"], "")
@@ -278,10 +281,8 @@ class FCConfigureTests(unittest.TestCase):
                     "example-bucket",
                     "--oss-prefix",
                     "sam3d/releases/bundle-deadbeef1234",
-                    "--segmenter-image",
-                    "registry-vpc.cn-shenzhen.aliyuncs.com/ns/repo:sam3-cu126-deadbeef",
-                    "--generator-image",
-                    "registry-vpc.cn-shenzhen.aliyuncs.com/ns/repo:cu121-deadbeef",
+                    "--image",
+                    "registry-vpc.cn-shenzhen.aliyuncs.com/ns/repo:sam3-sam3d-deadbeef",
                     "--output",
                     str(output),
                 ],
@@ -295,8 +296,9 @@ class FCConfigureTests(unittest.TestCase):
             plan = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(
                 [item["provision"]["defaultTarget"] for item in plan["functions"]],
-                [1, 1],
+                [0],
             )
+            self.assertEqual(plan["functions"][0]["concurrency"]["reservedConcurrency"], 1)
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
     def test_result_writer_refuses_symlink_destination(self) -> None:

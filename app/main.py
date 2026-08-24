@@ -10,19 +10,26 @@ from typing import Annotated, Literal
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from starlette.types import Receive, Scope, Send
 
 from app.model import ModelManager, ModelNotReadyError, decode_image, decode_mask
+from app.segmenter_client import SegmenterBackendError, SegmenterClient
 from app.settings import Settings
 
 LOGGER = logging.getLogger(__name__)
 
 settings = Settings.from_env()
-model_manager = ModelManager(settings)
+gpu_inference_lock = asyncio.Lock()
+model_manager = ModelManager(settings, inference_lock=gpu_inference_lock)
+segmenter_client = SegmenterClient(
+    settings.sam3_internal_url,
+    startup_timeout=settings.sam3_internal_startup_timeout,
+    request_timeout=settings.sam3_internal_request_timeout,
+)
 
 app = FastAPI(
-    title="SAM 3D Objects on Alibaba Cloud FC",
+    title="SAM 3 + SAM 3D Objects on Alibaba Cloud FC",
     version="1.0.0",
     docs_url="/docs",
     redoc_url=None,
@@ -33,6 +40,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["X-Segment-Score"],
 )
 
 
@@ -58,14 +66,15 @@ class TemporaryFileResponse(FileResponse):
 @app.get("/")
 async def root() -> dict[str, object]:
     return {
-        "service": "sam3d-fc",
+        "service": "sam3-sam3d-fc",
         "status": "ok",
-        "model_loaded": model_manager.loaded,
+        "model_loaded": model_manager.loaded and segmenter_client.loaded,
         "endpoints": [
             "/healthz",
             "/readyz",
             "/gpu",
             "/initialize",
+            "/segment",
             "/generate",
             "/invoke",
         ],
@@ -79,32 +88,73 @@ async def healthz() -> dict[str, str]:
 
 @app.get("/readyz")
 async def readyz() -> dict[str, object]:
+    sam3_status = await segmenter_client.ready_status()
     config_present = settings.config_path.is_file()
-    return {
+    sam3d_status = {
         "ready": model_manager.loaded,
         "model_loaded": model_manager.loaded,
         "config_present": config_present,
         "config_path": str(settings.config_path),
         "last_load_error": model_manager.load_error,
     }
+    sam3_ready = bool(
+        sam3_status.get("ready", sam3_status.get("model_loaded", False))
+    )
+    ready = model_manager.loaded and sam3_ready
+    return {
+        "ready": ready,
+        "model_loaded": ready,
+        "config_present": config_present,
+        "config_path": str(settings.config_path),
+        "checkpoint_present": bool(sam3_status.get("checkpoint_present", False)),
+        "models": {
+            "sam3": sam3_status,
+            "sam3d": sam3d_status,
+        },
+        "last_load_error": model_manager.load_error or segmenter_client.load_error,
+    }
 
 
 @app.get("/gpu")
 async def gpu() -> dict[str, object]:
+    sam3_status = await segmenter_client.gpu_status()
     try:
         import torch
     except ImportError:
-        return {"torch_installed": False, "cuda_available": False}
+        return {
+            "torch_installed": False,
+            "cuda_available": False,
+            "runtimes": {"sam3": sam3_status},
+        }
 
     cuda_available = torch.cuda.is_available()
-    return {
+    result: dict[str, object] = {
         "torch_installed": True,
         "torch_version": torch.__version__,
         "torch_cuda_version": torch.version.cuda,
         "cuda_available": cuda_available,
         "device_count": torch.cuda.device_count() if cuda_available else 0,
         "device_name": torch.cuda.get_device_name(0) if cuda_available else None,
+        "runtimes": {
+            "sam3": sam3_status,
+            "sam3d": {
+                "torch_version": torch.__version__,
+                "torch_cuda_version": torch.version.cuda,
+                "cuda_available": cuda_available,
+            },
+        },
     }
+    if cuda_available:
+        free_bytes, total_bytes = torch.cuda.mem_get_info(0)
+        result.update(
+            {
+                "memory_free_bytes": free_bytes,
+                "memory_total_bytes": total_bytes,
+                "sam3d_memory_allocated_bytes": torch.cuda.memory_allocated(0),
+                "sam3d_memory_reserved_bytes": torch.cuda.memory_reserved(0),
+            }
+        )
+    return result
 
 
 @app.post(
@@ -113,23 +163,82 @@ async def gpu() -> dict[str, object]:
     description="由函数计算在实例启动后调用；业务请求不应手动触发。",
 )
 async def initialize() -> dict[str, object]:
-    try:
-        await model_manager.initialize()
-    except ModelNotReadyError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        LOGGER.exception("SAM3D 模型初始化失败")
-        raise HTTPException(status_code=500, detail="SAM3D 模型初始化失败") from exc
+    sam3d_result, sam3_result = await asyncio.gather(
+        model_manager.initialize(),
+        segmenter_client.initialize(),
+        return_exceptions=True,
+    )
+    errors = [
+        result
+        for result in (sam3d_result, sam3_result)
+        if isinstance(result, BaseException)
+    ]
+    if errors:
+        known = [
+            error
+            for error in errors
+            if isinstance(error, (ModelNotReadyError, SegmenterBackendError))
+        ]
+        if len(known) == len(errors):
+            detail = "; ".join(str(error) for error in known)
+            raise HTTPException(status_code=503, detail=detail)
+        for error in errors:
+            LOGGER.error(
+                "组合模型初始化失败",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        raise HTTPException(status_code=500, detail="SAM3/SAM3D 模型初始化失败")
 
-    return {"initialized": True, "config_path": str(settings.config_path)}
+    return {
+        "initialized": True,
+        "models": {"sam3": True, "sam3d": True},
+        "config_path": str(settings.config_path),
+    }
 
 
 @app.post("/invoke")
 async def invoke() -> dict[str, object]:
     return {
-        "message": "请使用 HTTP 触发器调用 POST /generate；/invoke 不接受二进制推理输入。",
-        "model_loaded": model_manager.loaded,
+        "message": "请使用同一个 HTTP 触发器调用 POST /segment 或 POST /generate。",
+        "model_loaded": model_manager.loaded and segmenter_client.loaded,
     }
+
+
+@app.post(
+    "/segment",
+    response_class=Response,
+    responses={200: {"content": {"image/png": {}}}},
+)
+async def segment(
+    image: Annotated[UploadFile, File(description="RGB/RGBA 输入图片")],
+    points: Annotated[
+        str,
+        Form(description='点选 JSON，例如 [{"x":10,"y":20,"label":1}]'),
+    ],
+) -> Response:
+    if not segmenter_client.loaded:
+        raise HTTPException(
+            status_code=503,
+            detail="SAM3 模型尚未由 FC Initializer 预热；请检查实例初始化日志",
+        )
+    image_data = await _read_upload(image, "image")
+    try:
+        async with gpu_inference_lock:
+            result = await segmenter_client.segment(
+                image=image_data,
+                filename=Path(image.filename or "image-upload").name,
+                content_type=image.content_type or "application/octet-stream",
+                points=points,
+            )
+    except SegmenterBackendError as exc:
+        if exc.status_code >= 500:
+            LOGGER.error("SAM3 内部服务失败：%s", exc)
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    headers = {"Cache-Control": "no-store"}
+    if result.score is not None:
+        headers["X-Segment-Score"] = result.score
+    return Response(content=result.content, media_type="image/png", headers=headers)
 
 
 @app.post("/generate", response_class=FileResponse)

@@ -17,6 +17,7 @@ from app.offline import (
     install_offline_torch_hub_guard,
 )
 from app.settings import Settings
+from shared.gpu_lock import InterProcessGpuLock
 
 LOGGER = logging.getLogger(__name__)
 
@@ -42,11 +43,13 @@ class ModelManager:
         settings: Settings,
         *,
         inference_lock: asyncio.Lock | None = None,
+        gpu_lock: InterProcessGpuLock | None = None,
     ) -> None:
         self._settings = settings
         self._model: Any | None = None
         self._load_lock = asyncio.Lock()
         self._inference_lock = inference_lock or asyncio.Lock()
+        self._gpu_lock = gpu_lock or InterProcessGpuLock(settings.gpu_lock_path)
         self._load_error: str | None = None
 
     @property
@@ -168,19 +171,20 @@ class ModelManager:
         if self._model is None:
             raise ModelNotReadyError("SAM3D 模型尚未初始化")
 
-        output = self._model(image, mask, seed=seed)
-        if output_format == "ply":
-            gaussian_splat = output.get("gs")
-            if gaussian_splat is None:
-                raise RuntimeError("SAM3D 推理结果中没有 gs，无法导出 PLY")
-            gaussian_splat.save_ply(str(output_path))
-        elif output_format == "glb":
-            mesh = output.get("glb")
-            if mesh is None:
-                raise RuntimeError("SAM3D 推理结果中没有 glb，无法导出 GLB")
-            mesh.export(str(output_path), file_type="glb")
-        else:
-            raise ValueError(f"不支持的输出格式：{output_format}")
+        with self._gpu_lock.acquire():
+            output = self._model(image, mask, seed=seed)
+            if output_format == "ply":
+                gaussian_splat = output.get("gs")
+                if gaussian_splat is None:
+                    raise RuntimeError("SAM3D 推理结果中没有 gs，无法导出 PLY")
+                gaussian_splat.save_ply(str(output_path))
+            elif output_format == "glb":
+                mesh = output.get("glb")
+                if mesh is None:
+                    raise RuntimeError("SAM3D 推理结果中没有 glb，无法导出 GLB")
+                mesh.export(str(output_path), file_type="glb")
+            else:
+                raise ValueError(f"不支持的输出格式：{output_format}")
 
         if not output_path.is_file():
             raise RuntimeError(f"推理完成，但未生成输出文件：{output_path}")

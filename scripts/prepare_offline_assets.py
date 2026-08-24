@@ -22,7 +22,7 @@ SAM3D_REVISION = "2e73555018d2741ccd486e56c24fac41155a1dc6"
 SAM3_REPOSITORY = "facebook/sam3"
 # Traceable to the Hugging Face model API with expanded LFS metadata:
 # https://huggingface.co/api/models/facebook/sam3/revision/3c879f39826c281e95690f02c7821c4de09afae7?blobs=true
-# The Git source commit used by Dockerfile.segmenter belongs to a separate
+# The Git source commit used by Dockerfile's segmenter-builder belongs to a separate
 # repository/history and is therefore pinned independently.
 SAM3_REVISION = "3c879f39826c281e95690f02c7821c4de09afae7"
 SAM3_FILENAME = "sam3.pt"

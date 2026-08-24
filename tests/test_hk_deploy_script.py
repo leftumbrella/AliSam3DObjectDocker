@@ -63,7 +63,11 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn("--acr-image", result.stdout)
         self.assertIn("--skip-configure-fc", result.stdout)
         self.assertIn("--sam3-source", result.stdout)
-        self.assertIn("--segmenter-provisioned-instances", result.stdout)
+        self.assertIn("--fc-function-name", result.stdout)
+        self.assertIn("--provisioned-instances", result.stdout)
+        self.assertIn("--reserved-concurrency", result.stdout)
+        self.assertIn("--gpu-type", result.stdout)
+        self.assertIn("--gpu-memory-size", result.stdout)
         self.assertIn("敏感信息不接受命令行参数", result.stdout)
 
     def test_script_runs_in_foreground_without_tmux_relaunch(self) -> None:
@@ -114,13 +118,14 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn("example-bucket", result.stdout)
         self.assertIn(
             "crpi-example.cn-shenzhen.personal.cr.aliyuncs.com/namespace/"
-            "sam3dobject:cu121-",
+            "sam3dobject:sam3-sam3d-",
             result.stdout,
         )
         self.assertIn("linux/amd64", result.stdout)
-        self.assertIn("sam3-cu126-", result.stdout)
+        self.assertNotIn("sam3-cu126-", result.stdout)
         self.assertIn("FC 配置：        启用", result.stdout)
-        self.assertIn("SAM3=1，SAM3D=1", result.stdout)
+        self.assertIn("最小实例数：     0", result.stdout)
+        self.assertIn("函数总并发上限： 1", result.stdout)
         self.assertIn("<正式执行时将交互询问>", result.stdout)
         self.assertIn("dry-run：未执行任何系统或云端修改", result.stdout)
 
@@ -145,6 +150,41 @@ class HongKongDeployScriptTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("已通过 --skip-configure-fc 跳过", result.stdout)
+
+    def test_dry_run_accepts_the_supported_hopper_pair_only(self) -> None:
+        base_command = [
+            str(SCRIPT),
+            "--dry-run",
+            "--oss-bucket",
+            "example-bucket",
+            "--acr-image",
+            "crpi-example.cn-shenzhen.personal.cr.aliyuncs.com/ns/repo",
+            "--acr-username",
+            "example-user",
+            "--gpu-type",
+            "fc.gpu.hopper.1",
+        ]
+        accepted = subprocess.run(
+            [*base_command, "--gpu-memory-size", "98304"],
+            cwd=ROOT,
+            env=_safe_environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn("fc.gpu.hopper.1:98304MB", accepted.stdout)
+
+        rejected = subprocess.run(
+            [*base_command, "--gpu-memory-size", "49152"],
+            cwd=ROOT,
+            env=_safe_environment(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("GPU 组合仅支持", rejected.stderr)
 
     def test_acr_image_rejects_historical_address_pitfalls(self) -> None:
         cases = (
@@ -283,25 +323,28 @@ class HongKongDeployScriptTests(unittest.TestCase):
             self.script,
         )
 
-        segmenter = (ROOT / "Dockerfile.segmenter").read_text(encoding="utf-8")
-        sam3_ref = re.search(r"^ARG SAM3_REF=(\S+)$", segmenter, re.MULTILINE)
+        sam3_ref = re.search(r"^ARG SAM3_REF=(\S+)$", self.dockerfile, re.MULTILINE)
         self.assertIsNotNone(sam3_ref)
         self.assertIn(f"readonly SAM3_REF='{sam3_ref.group(1)}'", self.script)
 
-    def test_two_images_and_fc_helper_are_in_the_one_command_path(self) -> None:
+    def test_one_combined_image_and_fc_helper_are_in_the_one_command_path(self) -> None:
         for required in (
-            "Dockerfile.segmenter",
             'push_one_image_with_retry "$LOCAL_IMAGE" "$REMOTE_IMAGE"',
-            'push_one_image_with_retry "$SEGMENTER_LOCAL_IMAGE" "$SEGMENTER_REMOTE_IMAGE"',
             'verify_remote_manifest "$REMOTE_IMAGE"',
-            'verify_remote_manifest "$SEGMENTER_REMOTE_IMAGE"',
             '"$PROJECT_ROOT/scripts/configure_fc.py"',
-            "--segmenter-provisioned-instances",
-            "--generator-provisioned-instances",
+            '--build-arg "SAM3D_REF=${SAM3D_REF}"',
+            '--build-arg "SAM3_REF=${SAM3_REF}"',
+            "--function-name",
+            "--provisioned-instances",
+            "--reserved-concurrency",
+            "--gpu-type",
+            "--gpu-memory-size",
             "FC_DEPLOYMENT_RESULT_FILE",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.script)
+        self.assertNotIn("Dockerfile.segmenter", self.script)
+        self.assertNotIn("SEGMENTER_LOCAL_IMAGE", self.script)
 
     def test_assets_use_content_addressed_prefix_and_nonsecret_result(self) -> None:
         self.assertIn("storage/offline-assets.sha256", self.script)
@@ -324,6 +367,8 @@ class HongKongDeployScriptTests(unittest.TestCase):
         ):
             with self.subTest(secret=secret):
                 self.assertNotIn(secret, result_block)
+        self.assertIn("FC_FUNCTION_NAME", result_block)
+        self.assertIn("FC_HTTP_URL", result_block)
 
     def test_deployment_guide_uses_the_one_command_path(self) -> None:
         self.assertIn("## 推荐：一键完成香港 ECS 动作", self.deployment)

@@ -209,7 +209,7 @@
 
     .endpoint-fields {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr);
       gap: 12px;
     }
 
@@ -1155,7 +1155,7 @@
       <div>
         <p class="eyebrow">FC GPU Runtime Console</p>
         <h1>SAM 3D / 对象生成探针</h1>
-        <p class="subtitle">上传图片后用加选点与减选点实时获得对象 Mask，再将确认后的 Mask 交给 3D 函数。模型由 FC Initializer 在实例启动阶段预热，页面不提供手动加载入口。</p>
+        <p class="subtitle">上传图片后用加选点与减选点实时获得对象 Mask，再将确认后的 Mask 交给同一个 FC 函数生成 3D。两个模型由 FC Initializer 在实例启动阶段预热，页面不提供手动加载入口。</p>
       </div>
       <div class="build-stamp" aria-label="客户端信息">
         <strong>CLIENT 01</strong>
@@ -1167,23 +1167,10 @@
     <section class="endpoint-panel" aria-labelledby="endpoint-title">
       <div class="endpoint-fields">
         <div>
-          <label class="field-label" id="endpoint-title" for="segment-endpoint">Mask 分割函数地址</label>
+          <label class="field-label" id="endpoint-title" for="service-endpoint">SAM3 / SAM3D 组合函数地址</label>
           <input
             class="endpoint-input"
-            id="segment-endpoint"
-            type="url"
-            inputmode="url"
-            spellcheck="false"
-            autocomplete="url"
-            placeholder="https://your-segmenter.cn-shenzhen.fcapp.run"
-            value=""
-          >
-        </div>
-        <div>
-          <label class="field-label" for="three-d-endpoint">3D 生成函数地址</label>
-          <input
-            class="endpoint-input"
-            id="three-d-endpoint"
+            id="service-endpoint"
             type="url"
             inputmode="url"
             spellcheck="false"
@@ -1194,10 +1181,9 @@
       </div>
       <div class="endpoint-actions">
         <button class="primary-button" id="check-button" type="button">顺序检查</button>
-        <button id="open-segment-button" type="button">打开分割地址</button>
-        <button id="open-three-d-button" type="button">打开 3D 地址</button>
+        <button id="open-service-button" type="button">打开组合服务</button>
       </div>
-      <p class="endpoint-note">顺序检查只读取两个函数的健康与预热状态，不触发模型加载。两个地址只保存在当前浏览器的 localStorage 中。</p>
+      <p class="endpoint-note">顺序检查只读取一个函数内两个模型的健康与预热状态，不触发模型加载。地址只保存在当前浏览器的 localStorage 中。</p>
     </section>
 
     <div class="notices" aria-live="polite">
@@ -1440,7 +1426,7 @@
 
     <footer class="page-footer">
       <span>LOCAL TEST CLIENT / NO CLOUD CREDENTIAL STORAGE</span>
-      <span id="footer-endpoint">SEGMENT: NOT SET · 3D: NOT SET</span>
+      <span id="footer-endpoint">SERVICE: NOT SET</span>
     </footer>
   </div>
 
@@ -1449,19 +1435,16 @@
   <script>
     "use strict";
 
-    const DEFAULT_SEGMENT_ENDPOINT = "";
-    const DEFAULT_THREE_D_ENDPOINT = "https://samd-object-duanxppffx.cn-shenzhen.fcapp.run";
+    const DEFAULT_ENDPOINT = "https://samd-object-duanxppffx.cn-shenzhen.fcapp.run";
     const MAX_FILE_BYTES = 20 * 1024 * 1024;
     const MAX_REQUEST_BYTES = 30 * 1024 * 1024;
     const MAX_IMAGE_PIXELS = 40_000_000;
     const MAX_LOG_ENTRIES = 30;
 
     const elements = {
-      segmentEndpoint: document.querySelector("#segment-endpoint"),
-      threeDEndpoint: document.querySelector("#three-d-endpoint"),
+      serviceEndpoint: document.querySelector("#service-endpoint"),
       checkButton: document.querySelector("#check-button"),
-      openSegmentButton: document.querySelector("#open-segment-button"),
-      openThreeDButton: document.querySelector("#open-three-d-button"),
+      openServiceButton: document.querySelector("#open-service-button"),
       cancelButton: document.querySelector("#cancel-button"),
       clearLogButton: document.querySelector("#clear-log-button"),
       timer: document.querySelector("#timer"),
@@ -1537,12 +1520,8 @@
       }, 20);
     }
 
-    function endpointElement(kind) {
-      return kind === "segment" ? elements.segmentEndpoint : elements.threeDEndpoint;
-    }
-
-    function endpointDefault(kind) {
-      return kind === "segment" ? DEFAULT_SEGMENT_ENDPOINT : DEFAULT_THREE_D_ENDPOINT;
+    function endpointElement() {
+      return elements.serviceEndpoint;
     }
 
     function normalizeEndpoint(kind) {
@@ -1572,20 +1551,18 @@
     }
 
     function updateEndpointDisplay() {
-      const segment = validateEndpoint("segment");
-      const threeD = validateEndpoint("threeD");
-      elements.footerEndpoint.textContent = `SEGMENT: ${segment || "INVALID"} · 3D: ${threeD || "INVALID"}`;
-      return Boolean(segment && threeD);
+      const service = validateEndpoint("service");
+      elements.footerEndpoint.textContent = `SERVICE: ${service || "INVALID"}`;
+      return Boolean(service);
     }
 
     function saveEndpoints() {
       if (!updateEndpointDisplay()) {
-        showRuntimeNotice("地址无效", "请填写两个完整的 http:// 或 https:// 地址。", "danger");
+        showRuntimeNotice("地址无效", "请填写完整的 http:// 或 https:// 组合函数地址。", "danger");
         return;
       }
       try {
-        window.localStorage.setItem("sam3d-segment-endpoint", normalizeEndpoint("segment"));
-        window.localStorage.setItem("sam3d-three-d-endpoint", normalizeEndpoint("threeD"));
+        window.localStorage.setItem("sam3d-service-endpoint", normalizeEndpoint("service"));
       } catch (error) {
         showRuntimeNotice("地址未保存", "浏览器禁止使用 localStorage，但本次联调仍可继续。", "info");
       }
@@ -1593,11 +1570,9 @@
 
     function loadEndpoints() {
       try {
-        elements.segmentEndpoint.value = window.localStorage.getItem("sam3d-segment-endpoint") || DEFAULT_SEGMENT_ENDPOINT;
-        elements.threeDEndpoint.value = window.localStorage.getItem("sam3d-three-d-endpoint") || DEFAULT_THREE_D_ENDPOINT;
+        elements.serviceEndpoint.value = window.localStorage.getItem("sam3d-service-endpoint") || window.localStorage.getItem("sam3d-three-d-endpoint") || DEFAULT_ENDPOINT;
       } catch (error) {
-        elements.segmentEndpoint.value = DEFAULT_SEGMENT_ENDPOINT;
-        elements.threeDEndpoint.value = DEFAULT_THREE_D_ENDPOINT;
+        elements.serviceEndpoint.value = DEFAULT_ENDPOINT;
       }
       updateEndpointDisplay();
     }
@@ -1639,8 +1614,7 @@
     function setBusy(isBusy) {
       state.busy = isBusy;
       elements.checkButton.disabled = isBusy;
-      elements.openSegmentButton.disabled = isBusy;
-      elements.openThreeDButton.disabled = isBusy;
+      elements.openServiceButton.disabled = isBusy;
       elements.cancelButton.hidden = !isBusy;
       elements.selectionStage.setAttribute("aria-disabled", String(isBusy));
       updateSelectionActions();
@@ -1848,26 +1822,12 @@
     async function runSequentialChecks() {
       elements.authNotice.hidden = true;
       await runOperation("check", async (signal) => {
-        updateStatus("segment", "pending", "正在检查", "SEGMENT GET /healthz");
-        updateStatus("service", "unknown", "等待前一步", "3D GET /healthz");
-        updateStatus("gpu", "unknown", "等待前一步", "顺序执行，避免并发唤醒");
-        updateStatus("checkpoint", "unknown", "等待前一步", "3D GET /readyz");
+        updateStatus("segment", "unknown", "等待预热信息", "SAM3 状态来自组合 /readyz");
+        updateStatus("service", "pending", "正在检查", "GET /healthz");
+        updateStatus("gpu", "unknown", "等待前一步", "GET /gpu");
+        updateStatus("checkpoint", "unknown", "等待前一步", "GET /readyz");
         updateStatus("model", "unknown", "等待预热信息", "由 FC Initializer 加载");
 
-        const segmentHealth = await apiRequest("segment", "/healthz", { signal });
-        const segmentHealthOk = segmentHealth.payload && segmentHealth.payload.status === "ok";
-        updateStatus("segment", "pending", "容器在线", "继续读取 GET /readyz");
-        const segmentReady = await apiRequest("segment", "/readyz", { signal });
-        const segmentReadyData = segmentReady.payload || {};
-        const segmentLoaded = Boolean(segmentReadyData.model_loaded || segmentReadyData.ready);
-        updateStatus(
-          "segment",
-          segmentHealthOk && segmentLoaded ? "good" : (segmentReadyData.last_load_error ? "bad" : "warn"),
-          segmentLoaded ? "分割模型已预热" : (segmentReadyData.last_load_error ? "预热失败" : "等待 Initializer"),
-          segmentReadyData.last_load_error || segmentReadyData.checkpoint_path || `HTTP 200 · ${formatElapsed(segmentReady.elapsed)}`
-        );
-
-        updateStatus("service", "pending", "正在检查", "3D GET /healthz");
         const health = await apiRequest("threeD", "/healthz", { signal });
         const healthOk = health.payload && health.payload.status === "ok";
         updateStatus(
@@ -1881,10 +1841,12 @@
         const gpu = await apiRequest("threeD", "/gpu", { signal });
         const gpuData = gpu.payload || {};
         const cudaReady = Boolean(gpuData.cuda_available) && Number(gpuData.device_count || 0) > 0;
+        const memoryFreeGb = Number(gpuData.memory_free_bytes || 0) / (1024 ** 3);
         const gpuDetail = [
           gpuData.torch_version ? `Torch ${gpuData.torch_version}` : "",
           gpuData.torch_cuda_version ? `CUDA ${gpuData.torch_cuda_version}` : "",
-          `${Number(gpuData.device_count || 0)} device`
+          `${Number(gpuData.device_count || 0)} device`,
+          memoryFreeGb > 0 ? `${memoryFreeGb.toFixed(1)} GB free` : ""
         ].filter(Boolean).join(" · ");
         updateStatus(
           "gpu",
@@ -1896,23 +1858,39 @@
         updateStatus("checkpoint", "pending", "正在检查", "GET /readyz");
         const ready = await apiRequest("threeD", "/readyz", { signal });
         const readyData = ready.payload || {};
+        const models = readyData.models || {};
+        const sam3 = models.sam3 || {};
+        const sam3d = models.sam3d || {};
+        const sam3Loaded = Boolean(sam3.model_loaded || sam3.ready);
+        const sam3dLoaded = Boolean(sam3d.model_loaded || sam3d.ready);
+        const sam3Error = sam3.last_load_error || "";
+        const sam3dError = sam3d.last_load_error || readyData.last_load_error || "";
+        updateStatus(
+          "segment",
+          sam3Loaded ? "good" : (sam3Error ? "bad" : "warn"),
+          sam3Loaded ? "分割模型已预热" : (sam3Error ? "预热失败" : "等待 Initializer"),
+          sam3Error || sam3.checkpoint_path || "SAM3 checkpoint 状态未返回"
+        );
+        const assetsReady = Boolean(
+          sam3.checkpoint_present || readyData.checkpoint_present
+        ) && Boolean(sam3d.config_present || readyData.config_present);
         updateStatus(
           "checkpoint",
-          readyData.config_present ? "good" : "bad",
-          readyData.config_present ? "配置已挂载" : "缺少配置",
-          readyData.config_path || "未返回 checkpoint 路径"
+          assetsReady ? "good" : "bad",
+          assetsReady ? "两套模型资源已挂载" : "模型资源不完整",
+          `${sam3.checkpoint_path || "SAM3 checkpoint 未返回"} · ${sam3d.config_path || readyData.config_path || "SAM3D config 未返回"}`
         );
         updateStatus(
           "model",
-          readyData.model_loaded ? "good" : (readyData.last_load_error ? "bad" : "warn"),
-          readyData.model_loaded ? "3D 模型已预热" : (readyData.last_load_error ? "预热失败" : "等待 Initializer"),
-          readyData.last_load_error || (readyData.model_loaded ? "GPU 实例可开始推理" : "请检查函数 Initializer 配置")
+          sam3dLoaded ? "good" : (sam3dError ? "bad" : "warn"),
+          sam3dLoaded ? "3D 模型已预热" : (sam3dError ? "预热失败" : "等待 Initializer"),
+          sam3dError || (sam3dLoaded ? "GPU 实例可开始推理" : "请检查函数 Initializer 配置")
         );
 
-        const allReady = segmentHealthOk && segmentLoaded && healthOk && cudaReady && Boolean(readyData.config_present) && Boolean(readyData.model_loaded);
+        const allReady = healthOk && cudaReady && assetsReady && sam3Loaded && sam3dLoaded && Boolean(readyData.ready);
         showRuntimeNotice(
-          allReady ? "两个函数均已预热" : "检查完成，但仍有阻塞项",
-          allReady ? "SAM3 分割与 SAM3D 生成实例均可直接接收推理请求。" : "请查看左侧状态项，确认两个函数的 Initializer 均成功完成。",
+          allReady ? "组合函数已完成双模型预热" : "检查完成，但仍有阻塞项",
+          allReady ? "同一 GPU 实例可以串行接收 SAM3 分割与 SAM3D 生成请求。" : "请查看左侧状态项，确认组合函数的 Initializer 已同时加载两个模型。",
           allReady ? "info" : "warn"
         );
       });
@@ -2415,7 +2393,7 @@
       const endpoint = validateEndpoint(kind);
       updateEndpointDisplay();
       if (!endpoint) {
-        showRuntimeNotice("地址无效", `请先修正${kind === "segment" ? "分割" : "3D"}函数地址。`, "danger");
+        showRuntimeNotice("地址无效", "请先修正组合函数地址。", "danger");
         endpointElement(kind).focus();
         return;
       }
@@ -2458,17 +2436,14 @@
       }
     }
 
-    for (const endpointInput of [elements.segmentEndpoint, elements.threeDEndpoint]) {
-      endpointInput.addEventListener("input", updateEndpointDisplay);
-      endpointInput.addEventListener("change", saveEndpoints);
-    }
+    elements.serviceEndpoint.addEventListener("input", updateEndpointDisplay);
+    elements.serviceEndpoint.addEventListener("change", saveEndpoints);
     elements.checkButton.addEventListener("click", runSequentialChecks);
     elements.generateButton.addEventListener("click", generateArtifact);
     elements.cancelButton.addEventListener("click", () => {
       if (state.currentController) state.currentController.abort();
     });
-    elements.openSegmentButton.addEventListener("click", () => openEndpoint("segment"));
-    elements.openThreeDButton.addEventListener("click", () => openEndpoint("threeD"));
+    elements.openServiceButton.addEventListener("click", () => openEndpoint("service"));
     elements.clearLogButton.addEventListener("click", () => {
       elements.logList.replaceChildren();
       const empty = document.createElement("li");

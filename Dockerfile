@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04 AS sam3d-builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG MICROMAMBA_VERSION=2.8.1-0
@@ -7,7 +7,7 @@ ARG SAM3D_REPOSITORY=https://github.com/facebookresearch/sam-3d-objects.git
 ARG SAM3D_REF=f91db411c50efee93d8db7aeb323885650f6f722
 ARG PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
-ARG TORCH_CUDA_ARCH_LIST=8.9
+ARG TORCH_CUDA_ARCH_LIST=8.9;9.0
 ARG MAX_JOBS=2
 ARG NVCC_THREADS=2
 
@@ -162,7 +162,51 @@ RUN set -eu; \
         /tmp/patch_offline_runtime.py \
         /tmp/mamba-remove-plan.json
 
-FROM ubuntu:22.04 AS runtime
+FROM python:3.12-slim-bookworm AS segmenter-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG SAM3_REPOSITORY=https://github.com/facebookresearch/sam3.git
+# The Git source and checkpoint revisions are independently versioned; this
+# source revision is separate from the pin in scripts/prepare_offline_assets.py.
+ARG SAM3_REF=8f0b7f4d4e7eda2ed606ebde6702c93359ad01da
+ARG PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu126
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+
+ENV PATH=/opt/venv/bin:${PATH} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN python -m pip install \
+        --index-url "${PYTORCH_INDEX_URL}" \
+        torch==2.7.1+cu126 \
+        torchvision==0.22.1+cu126
+
+COPY requirements-segmenter.txt /tmp/requirements-segmenter.txt
+
+RUN python -m pip install \
+        --index-url "${PYPI_INDEX_URL}" \
+        -r /tmp/requirements-segmenter.txt \
+    && rm /tmp/requirements-segmenter.txt
+
+WORKDIR /opt/sam3
+
+RUN git init \
+    && git remote add origin "${SAM3_REPOSITORY}" \
+    && git fetch --depth=1 origin "${SAM3_REF}" \
+    && git checkout --detach FETCH_HEAD \
+    && python -m pip install --no-deps -e . \
+    && rm -rf .git \
+    && python -c 'from sam3.model_builder import build_tracker; from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor'
+
+FROM python:3.12-slim-bookworm AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -173,16 +217,20 @@ RUN apt-get update \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /opt/micromamba/envs/sam3d-objects /opt/micromamba/envs/sam3d-objects
-COPY --from=builder /opt/sam-3d-objects /opt/sam-3d-objects
+COPY --from=sam3d-builder /opt/micromamba/envs/sam3d-objects /opt/micromamba/envs/sam3d-objects
+COPY --from=sam3d-builder /opt/sam-3d-objects /opt/sam-3d-objects
+COPY --from=segmenter-builder /opt/venv /opt/venv
+COPY --from=segmenter-builder /opt/sam3 /opt/sam3
 
 COPY app /srv/app
+COPY segmenter /srv/segmenter
+COPY shared /srv/shared
 COPY scripts/fc_initializer.sh /srv/scripts/fc_initializer.sh
 
 ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
     CONDA_PREFIX=/opt/micromamba/envs/sam3d-objects \
     CUDA_HOME=/opt/micromamba/envs/sam3d-objects \
-    PYTHONPATH=/srv:/opt/sam-3d-objects \
+    PYTHONPATH=/srv:/opt/sam-3d-objects:/opt/sam3 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     LIDRA_SKIP_INIT=true \
@@ -202,6 +250,17 @@ ENV PATH=/opt/micromamba/envs/sam3d-objects/bin:${PATH} \
     SAM3D_MAX_REQUEST_MB=30 \
     SAM3D_MAX_IMAGE_PIXELS=40000000 \
     SAM3D_TMP_DIR=/tmp/sam3d \
+    SAM3_ROOT=/opt/sam3 \
+    SAM3_CHECKPOINT_PATH=/mnt/nas/sam3d/sam3/sam3.pt \
+    SAM3_MAX_UPLOAD_MB=20 \
+    SAM3_MAX_IMAGE_PIXELS=40000000 \
+    SAM3_MAX_POINTS=64 \
+    SAM3_PYTHON=/opt/venv/bin/python \
+    SAM3_INTERNAL_PORT=9001 \
+    SAM3_INTERNAL_URL=http://127.0.0.1:9001 \
+    SAM3_INTERNAL_STARTUP_TIMEOUT=30 \
+    SAM3_INTERNAL_REQUEST_TIMEOUT=1800 \
+    GPU_LOCK_PATH=/tmp/sam3d-gpu.lock \
     PORT=9000 \
     KEEP_ALIVE_TIMEOUT=900 \
     FC_INITIALIZER_HTTP_TIMEOUT=295
@@ -210,4 +269,4 @@ WORKDIR /opt/sam-3d-objects
 
 EXPOSE 9000
 
-CMD ["python", "-m", "app.serve"]
+CMD ["python", "-m", "app.supervisor"]

@@ -1,4 +1,4 @@
-"""Build-contract tests for the standalone SAM 3 segmenter image."""
+"""Build-contract tests for the combined SAM 3 and SAM 3D image."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SEGMENTER_DOCKERFILE = ROOT / "Dockerfile.segmenter"
-GENERATOR_DOCKERFILE = ROOT / "Dockerfile"
+DOCKERFILE = ROOT / "Dockerfile"
 REQUIREMENTS = ROOT / "requirements-segmenter.txt"
 INITIALIZER = ROOT / "scripts" / "fc_initializer.sh"
 ASSETS = ROOT / "scripts" / "prepare_offline_assets.py"
@@ -19,18 +18,17 @@ ASSETS = ROOT / "scripts" / "prepare_offline_assets.py"
 class SegmenterDockerfileContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.segmenter = SEGMENTER_DOCKERFILE.read_text(encoding="utf-8")
-        cls.generator = GENERATOR_DOCKERFILE.read_text(encoding="utf-8")
+        cls.dockerfile = DOCKERFILE.read_text(encoding="utf-8")
         cls.requirements = REQUIREMENTS.read_text(encoding="utf-8")
         cls.initializer = INITIALIZER.read_text(encoding="utf-8")
         cls.assets = ASSETS.read_text(encoding="utf-8")
 
     def test_segmenter_runtime_is_python312_torch27_cuda126(self) -> None:
-        self.assertGreaterEqual(self.segmenter.count("FROM python:3.12-slim-bookworm"), 2)
-        self.assertIn("torch==2.7.1+cu126", self.segmenter)
-        self.assertIn("torchvision==0.22.1+cu126", self.segmenter)
-        self.assertIn("/whl/cu126", self.segmenter)
-        self.assertRegex(self.segmenter, r"ARG SAM3_REF=[0-9a-f]{40}")
+        self.assertGreaterEqual(self.dockerfile.count("FROM python:3.12-slim-bookworm"), 2)
+        self.assertIn("torch==2.7.1+cu126", self.dockerfile)
+        self.assertIn("torchvision==0.22.1+cu126", self.dockerfile)
+        self.assertIn("/whl/cu126", self.dockerfile)
+        self.assertRegex(self.dockerfile, r"ARG SAM3_REF=[0-9a-f]{40}")
 
     def test_actual_model_builder_import_dependencies_are_explicit_and_gated(self) -> None:
         for dependency in (
@@ -41,19 +39,24 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
         ):
             with self.subTest(dependency=dependency):
                 self.assertIn(dependency, self.requirements)
-        self.assertIn("from sam3.model_builder import build_tracker", self.segmenter)
+        self.assertIn("from sam3.model_builder import build_tracker", self.dockerfile)
         self.assertIn(
             "from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor",
-            self.segmenter,
+            self.dockerfile,
         )
 
-    def test_segmenter_entrypoint_and_checkpoint_are_isolated(self) -> None:
-        self.assertIn("COPY segmenter /srv/segmenter", self.segmenter)
+    def test_both_runtimes_are_isolated_inside_one_image(self) -> None:
+        self.assertIn("COPY segmenter /srv/segmenter", self.dockerfile)
+        self.assertIn("COPY app /srv/app", self.dockerfile)
+        self.assertIn("COPY shared /srv/shared", self.dockerfile)
+        self.assertIn("COPY --from=segmenter-builder /opt/venv /opt/venv", self.dockerfile)
+        self.assertIn("COPY --from=segmenter-builder /opt/sam3 /opt/sam3", self.dockerfile)
         self.assertIn(
             "SAM3_CHECKPOINT_PATH=/mnt/nas/sam3d/sam3/sam3.pt",
-            self.segmenter,
+            self.dockerfile,
         )
-        self.assertIn('CMD ["python", "-m", "segmenter.serve"]', self.segmenter)
+        self.assertIn('CMD ["python", "-m", "app.supervisor"]', self.dockerfile)
+        self.assertFalse((ROOT / "Dockerfile.segmenter").exists())
 
     def test_checkpoint_pin_is_traceable_and_separate_from_source_pin(self) -> None:
         self.assertIn("huggingface.co/api/models/facebook/sam3/revision/", self.assets)
@@ -62,14 +65,14 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
             "9999e2341ceef5e136daa386eecb55cb414446a00ac2b55eb2dfd2f7c3cf8c9e",
             self.assets,
         )
-        source_ref = re.search(r"ARG SAM3_REF=([0-9a-f]{40})", self.segmenter)
+        source_ref = re.search(r"ARG SAM3_REF=([0-9a-f]{40})", self.dockerfile)
         weight_ref = re.search(r'SAM3_REVISION = "([0-9a-f]{40})"', self.assets)
         self.assertIsNotNone(source_ref)
         self.assertIsNotNone(weight_ref)
         self.assertNotEqual(source_ref.group(1), weight_ref.group(1))
-        self.assertIn("independently versioned", self.segmenter)
+        self.assertIn("independently versioned", self.dockerfile)
 
-    def test_initializer_is_sync_executable_and_copied_into_both_images(self) -> None:
+    def test_initializer_is_sync_executable_and_copied_into_combined_image(self) -> None:
         self.assertTrue(INITIALIZER.stat().st_mode & stat.S_IXUSR)
         self.assertEqual(self.initializer.splitlines()[0], "#!/bin/sh")
         self.assertIn("exec curl", self.initializer)
@@ -77,12 +80,11 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
         self.assertIn('--max-time "$INITIALIZER_TIMEOUT"', self.initializer)
         self.assertIn("http://127.0.0.1:9000/initialize", self.initializer)
         self.assertNotRegex(self.initializer, r"(?m)(?:^|[ \t])&[ \t]*(?:$|#)")
-        for dockerfile in (self.segmenter, self.generator):
-            self.assertIn(
-                "COPY scripts/fc_initializer.sh /srv/scripts/fc_initializer.sh",
-                dockerfile,
-            )
-            self.assertIn("curl", dockerfile)
+        self.assertIn(
+            "COPY scripts/fc_initializer.sh /srv/scripts/fc_initializer.sh",
+            self.dockerfile,
+        )
+        self.assertIn("curl", self.dockerfile)
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ readonly SAM3_REF='8f0b7f4d4e7eda2ed606ebde6702c93359ad01da'
 readonly FC_SDK_VERSION='4.8.2'
 readonly FC_CREDENTIALS_VERSION='1.0.12'
 readonly TEA_OPENAPI_VERSION='0.4.6'
-readonly TORCH_CUDA_ARCH_LIST_VALUE='8.9'
+readonly TORCH_CUDA_ARCH_LIST_VALUE='8.9;9.0'
 readonly FC_IMAGE_LIMIT_BYTES=$((15 * 1024 * 1024 * 1024))
 
 TRANSFER_ROOT="${TRANSFER_ROOT:-/root/sam3d-transfer}"
@@ -36,11 +36,12 @@ FC_ROLE_ARN="${FC_ROLE_ARN:-}"
 FC_ACR_IMAGE="${FC_ACR_IMAGE:-}"
 FC_ACR_INSTANCE_ID="${FC_ACR_INSTANCE_ID:-}"
 FC_OSS_ENDPOINT="${FC_OSS_ENDPOINT:-https://oss-cn-shenzhen-internal.aliyuncs.com}"
-FC_SEGMENTER_FUNCTION="${FC_SEGMENTER_FUNCTION:-sam3-segmenter}"
-FC_GENERATOR_FUNCTION="${FC_GENERATOR_FUNCTION:-sam3d-generator}"
+FC_FUNCTION_NAME="${FC_FUNCTION_NAME:-sam3d-object}"
 FC_TRIGGER_NAME="${FC_TRIGGER_NAME:-http-trigger}"
-FC_SEGMENTER_PROVISIONED_INSTANCES="${FC_SEGMENTER_PROVISIONED_INSTANCES:-1}"
-FC_GENERATOR_PROVISIONED_INSTANCES="${FC_GENERATOR_PROVISIONED_INSTANCES:-1}"
+FC_PROVISIONED_INSTANCES="${FC_PROVISIONED_INSTANCES:-0}"
+FC_RESERVED_CONCURRENCY="${FC_RESERVED_CONCURRENCY:-1}"
+FC_GPU_TYPE="${FC_GPU_TYPE:-fc.gpu.ada.1}"
+FC_GPU_MEMORY_SIZE="${FC_GPU_MEMORY_SIZE:-49152}"
 MAX_JOBS="${MAX_JOBS:-2}"
 NVCC_THREADS="${NVCC_THREADS:-2}"
 
@@ -58,11 +59,7 @@ GIT_COMMIT_SHORT=''
 IMAGE_TAG=''
 LOCAL_IMAGE=''
 REMOTE_IMAGE=''
-SEGMENTER_IMAGE_TAG=''
-SEGMENTER_LOCAL_IMAGE=''
-SEGMENTER_REMOTE_IMAGE=''
-FC_GENERATOR_IMAGE=''
-FC_SEGMENTER_IMAGE=''
+FC_IMAGE=''
 ASSET_RELEASE=''
 OSS_PREFIX=''
 DEPLOYMENT_RESULT_FILE=''
@@ -71,7 +68,7 @@ TEMP_DIR=''
 
 usage() {
   cat <<'EOF'
-从香港 Ubuntu ECS 准备 SAM3/SAM3D 离线资源、上传深圳 OSS，并构建推送两张 FC 镜像。
+从香港 Ubuntu ECS 准备 SAM3/SAM3D 离线资源、上传深圳 OSS，并构建推送一张组合 FC 镜像。
 
 用法：
   ./scripts/deploy_from_hk.sh [选项]
@@ -85,17 +82,16 @@ usage() {
   --transfer-root PATH       离线资源和断点目录，默认 /root/sam3d-transfer
   --sam3d-source PATH        已有 SAM3D checkpoints 目录，不再下载主 checkpoint
   --sam3-source PATH         已有 SAM3 sam3.pt 文件或所在目录
-  --configure-fc             幂等配置两个深圳 FC 函数（默认行为，便于显式声明）
+  --configure-fc             幂等配置一个深圳 FC GPU 函数（默认行为，便于显式声明）
   --skip-configure-fc        只准备资源和镜像，不创建或修改 FC
-  --fc-role-arn ARN          两个函数使用的 RAM Role ARN（也可用 FC_ROLE_ARN）
+  --fc-role-arn ARN          组合函数使用的 RAM Role ARN（也可用 FC_ROLE_ARN）
   --fc-acr-image IMAGE       FC 拉取用 ACR VPC 仓库，不含 tag；默认从公网地址推导
   --fc-acr-instance-id ID    企业版 ACR 实例 ID（如适用）
-  --fc-segmenter-function N  SAM3 分割函数名，默认 sam3-segmenter
-  --fc-generator-function N  SAM3D 生成函数名，默认 sam3d-generator
-  --segmenter-provisioned-instances N
-                             SAM3 预留实例数，默认 1；0 表示不等待预热
-  --generator-provisioned-instances N
-                             SAM3D 预留实例数，默认 1；0 表示不等待预热
+  --fc-function-name NAME    组合函数名，默认 sam3d-object
+  --provisioned-instances N  最小实例数，默认 0；1 表示部署时等待双模型预热
+  --reserved-concurrency N   函数总并发上限，默认 1；配合单实例并发 1 锁定单 GPU
+  --gpu-type TYPE            GPU 类型：fc.gpu.ada.1（默认）或 fc.gpu.hopper.1
+  --gpu-memory-size MB       GPU 显存：Ada 49152（默认）或 Hopper 98304
   --max-jobs N               CUDA 扩展编译并发，默认 2
   --nvcc-threads N           NVCC 线程数，默认 2
   --non-interactive          禁止所有提示，缺少信息或凭证时直接失败
@@ -240,24 +236,29 @@ parse_args() {
         FC_ACR_INSTANCE_ID=$2
         shift 2
         ;;
-      --fc-segmenter-function)
+      --fc-function-name)
         require_option_value "$1" "${2:-}"
-        FC_SEGMENTER_FUNCTION=$2
+        FC_FUNCTION_NAME=$2
         shift 2
         ;;
-      --fc-generator-function)
+      --provisioned-instances)
         require_option_value "$1" "${2:-}"
-        FC_GENERATOR_FUNCTION=$2
+        FC_PROVISIONED_INSTANCES=$2
         shift 2
         ;;
-      --segmenter-provisioned-instances)
+      --reserved-concurrency)
         require_option_value "$1" "${2:-}"
-        FC_SEGMENTER_PROVISIONED_INSTANCES=$2
+        FC_RESERVED_CONCURRENCY=$2
         shift 2
         ;;
-      --generator-provisioned-instances)
+      --gpu-type)
         require_option_value "$1" "${2:-}"
-        FC_GENERATOR_PROVISIONED_INSTANCES=$2
+        FC_GPU_TYPE=$2
+        shift 2
+        ;;
+      --gpu-memory-size)
+        require_option_value "$1" "${2:-}"
+        FC_GPU_MEMORY_SIZE=$2
         shift 2
         ;;
       --max-jobs)
@@ -323,7 +324,7 @@ collect_required_inputs() {
     if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
       die '无交互模式配置 FC 时缺少：FC_ROLE_ARN'
     fi
-    prompt_value FC_ROLE_ARN '两个 FC 函数使用的 RAM Role ARN'
+    prompt_value FC_ROLE_ARN '组合 FC 函数使用的 RAM Role ARN'
   fi
 }
 
@@ -383,9 +384,17 @@ validate_inputs() {
 
   if [[ "$CONFIGURE_FC" -eq 1 ]]; then
     validate_provisioned_instances \
-      FC_SEGMENTER_PROVISIONED_INSTANCES "$FC_SEGMENTER_PROVISIONED_INSTANCES"
+      FC_PROVISIONED_INSTANCES "$FC_PROVISIONED_INSTANCES"
     validate_provisioned_instances \
-      FC_GENERATOR_PROVISIONED_INSTANCES "$FC_GENERATOR_PROVISIONED_INSTANCES"
+      FC_RESERVED_CONCURRENCY "$FC_RESERVED_CONCURRENCY"
+    (( FC_RESERVED_CONCURRENCY >= 1 )) \
+      || die 'FC_RESERVED_CONCURRENCY 必须至少为 1'
+    (( FC_PROVISIONED_INSTANCES <= FC_RESERVED_CONCURRENCY )) \
+      || die '预留实例数不能大于函数总并发上限'
+    case "$FC_GPU_TYPE:$FC_GPU_MEMORY_SIZE" in
+      fc.gpu.ada.1:49152|fc.gpu.hopper.1:98304) ;;
+      *) die 'GPU 组合仅支持 fc.gpu.ada.1:49152 或 fc.gpu.hopper.1:98304' ;;
+    esac
     [[ "$FC_REGION" == 'cn-shenzhen' ]] \
       || die 'FC_REGION 必须为 cn-shenzhen，确保与 OSS/ACR 同地域'
     if [[ -n "$FC_ROLE_ARN" ]]; then
@@ -394,12 +403,8 @@ validate_inputs() {
     elif [[ "$DRY_RUN" -eq 0 ]]; then
       die '配置 FC 时必须提供 FC_ROLE_ARN'
     fi
-    [[ "$FC_SEGMENTER_FUNCTION" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,63}$ ]] \
-      || die 'FC_SEGMENTER_FUNCTION 格式无效'
-    [[ "$FC_GENERATOR_FUNCTION" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,63}$ ]] \
-      || die 'FC_GENERATOR_FUNCTION 格式无效'
-    [[ "$FC_SEGMENTER_FUNCTION" != "$FC_GENERATOR_FUNCTION" ]] \
-      || die '两个 FC 函数名不能相同'
+    [[ "$FC_FUNCTION_NAME" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,63}$ ]] \
+      || die 'FC_FUNCTION_NAME 格式无效'
     [[ "$FC_TRIGGER_NAME" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,63}$ ]] \
       || die 'FC_TRIGGER_NAME 格式无效'
     [[ "$FC_OSS_ENDPOINT" == 'https://oss-cn-shenzhen-internal.aliyuncs.com' ]] \
@@ -428,20 +433,15 @@ validate_inputs() {
 resolve_release_values() {
   GIT_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')"
   GIT_COMMIT_SHORT="$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
-  IMAGE_TAG="cu121-${GIT_COMMIT_SHORT}"
-  SEGMENTER_IMAGE_TAG="sam3-cu126-${GIT_COMMIT_SHORT}"
-  LOCAL_IMAGE="sam3d-fc:${IMAGE_TAG}"
-  SEGMENTER_LOCAL_IMAGE="sam3-segmenter-fc:${SEGMENTER_IMAGE_TAG}"
+  IMAGE_TAG="sam3-sam3d-${GIT_COMMIT_SHORT}"
+  LOCAL_IMAGE="sam3-sam3d-fc:${IMAGE_TAG}"
   if [[ -n "$ACR_IMAGE" ]]; then
     REMOTE_IMAGE="${ACR_IMAGE}:${IMAGE_TAG}"
-    SEGMENTER_REMOTE_IMAGE="${ACR_IMAGE}:${SEGMENTER_IMAGE_TAG}"
   else
     REMOTE_IMAGE='<等待填写 ACR 信息>'
-    SEGMENTER_REMOTE_IMAGE='<等待填写 ACR 信息>'
   fi
   if [[ -n "$FC_ACR_IMAGE" ]]; then
-    FC_GENERATOR_IMAGE="${FC_ACR_IMAGE}:${IMAGE_TAG}"
-    FC_SEGMENTER_IMAGE="${FC_ACR_IMAGE}:${SEGMENTER_IMAGE_TAG}"
+    FC_IMAGE="${FC_ACR_IMAGE}:${IMAGE_TAG}"
   fi
 }
 
@@ -465,27 +465,27 @@ print_plan() {
   OSS 版本前缀：  sam3d/releases/bundle-<离线清单哈希>
   ACR 完整仓库：  $acr_image
   ACR 用户：      $username
-  SAM3D 本地镜像：$LOCAL_IMAGE
-  SAM3D 远程镜像：$REMOTE_IMAGE
-  SAM3 本地镜像： $SEGMENTER_LOCAL_IMAGE
-  SAM3 远程镜像： $SEGMENTER_REMOTE_IMAGE
+  组合本地镜像： $LOCAL_IMAGE
+  组合远程镜像： $REMOTE_IMAGE
   CUDA 编译并发： MAX_JOBS=${MAX_JOBS}，NVCC_THREADS=${NVCC_THREADS}
 
 脚本将安装基础工具和 Docker/Buildx，准备并校验 SAM3/SAM3D 离线资源，
-上传深圳 OSS，构建两张 linux/amd64 镜像，推送 ACR 并检查 Manifest。
+上传深圳 OSS，构建一张包含两个隔离运行时的 linux/amd64 镜像，推送 ACR 并检查 Manifest。
 EOF
 
   if [[ "$CONFIGURE_FC" -eq 1 ]]; then
     cat <<EOF
   FC 配置：        启用（API 2023-03-30，默认）
   FC Role：        ${FC_ROLE_ARN:-<正式执行时将交互询问>}
-  SAM3 FC 镜像：   $FC_SEGMENTER_IMAGE
-  SAM3D FC 镜像：  $FC_GENERATOR_IMAGE
-  预留实例：       SAM3=${FC_SEGMENTER_PROVISIONED_INSTANCES}，SAM3D=${FC_GENERATOR_PROVISIONED_INSTANCES}
+  组合 FC 镜像：   $FC_IMAGE
+  函数名：         $FC_FUNCTION_NAME
+  最小实例数：     $FC_PROVISIONED_INSTANCES
+  函数总并发上限： $FC_RESERVED_CONCURRENCY
+  GPU 规格：        ${FC_GPU_TYPE}:${FC_GPU_MEMORY_SIZE}MB
   Initializer：    /bin/sh /srv/scripts/fc_initializer.sh（同步等待，超时 300 秒）
 
-函数配置会幂等创建/更新、只读挂载 OSS、创建匿名 HTTP 触发器，并等待预留
-实例达到目标且 currentError 为空。云凭证只通过 SDK default credential chain 读取。
+函数配置会幂等创建/更新、只读挂载 OSS、创建一个匿名 HTTP 触发器，并在最小
+实例数大于 0 时等待双模型 Initializer 完成。云凭证只通过 SDK default credential chain 读取。
 EOF
   else
     cat <<'EOF'
@@ -875,8 +875,8 @@ verify_local_image() {
   log "$label 镜像构建完成：$image，未压缩大小 ${image_size} 字节"
 }
 
-build_images() {
-  CURRENT_STEP='构建 SAM3D FC linux/amd64 镜像'
+build_image() {
+  CURRENT_STEP='构建 SAM3/SAM3D 组合 FC linux/amd64 镜像'
   cd "$PROJECT_ROOT"
   docker buildx build \
     --load \
@@ -885,25 +885,13 @@ build_images() {
     --provenance=false \
     --sbom=false \
     --build-arg "SAM3D_REF=${SAM3D_REF}" \
+    --build-arg "SAM3_REF=${SAM3_REF}" \
     --build-arg "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST_VALUE}" \
     --build-arg "MAX_JOBS=${MAX_JOBS}" \
     --build-arg "NVCC_THREADS=${NVCC_THREADS}" \
     -t "$LOCAL_IMAGE" \
     .
-  verify_local_image "$LOCAL_IMAGE" 'SAM3D'
-
-  CURRENT_STEP='构建 SAM3 分割 FC linux/amd64 镜像'
-  docker buildx build \
-    --load \
-    --progress=plain \
-    --platform linux/amd64 \
-    --provenance=false \
-    --sbom=false \
-    --file Dockerfile.segmenter \
-    --build-arg "SAM3_REF=${SAM3_REF}" \
-    -t "$SEGMENTER_LOCAL_IMAGE" \
-    .
-  verify_local_image "$SEGMENTER_LOCAL_IMAGE" 'SAM3'
+  verify_local_image "$LOCAL_IMAGE" 'SAM3/SAM3D 组合'
 }
 
 login_acr() {
@@ -1047,15 +1035,20 @@ write_deployment_result() {
   {
     printf 'GIT_COMMIT=%q\n' "$GIT_COMMIT"
     printf 'REMOTE_IMAGE=%q\n' "$REMOTE_IMAGE"
-    printf 'SAM3D_REMOTE_IMAGE=%q\n' "$REMOTE_IMAGE"
-    printf 'SAM3_REMOTE_IMAGE=%q\n' "$SEGMENTER_REMOTE_IMAGE"
     printf 'OSS_BUCKET=%q\n' "$OSS_BUCKET"
     printf 'OSS_PREFIX=%q\n' "$OSS_PREFIX"
     printf 'FC_OSS_BUCKET_PATH=%q\n' "/$OSS_PREFIX"
     printf 'FC_OSS_MOUNT_DIR=%q\n' '/mnt/nas/sam3d'
     printf 'FC_PORT=%q\n' '9000'
     if [[ "$CONFIGURE_FC" -eq 1 ]]; then
+      local service_url
+      service_url="$(jq -er '.functions[] | select(.kind == "unified") | .urlInternet // empty' "$FC_DEPLOYMENT_RESULT_FILE")" \
+        || die 'FC 回验结果缺少组合服务 HTTP 公网 URL'
       printf 'FC_DEPLOYMENT_RESULT=%q\n' "$FC_DEPLOYMENT_RESULT_FILE"
+      printf 'FC_FUNCTION_NAME=%q\n' "$FC_FUNCTION_NAME"
+      printf 'FC_HTTP_URL=%q\n' "$service_url"
+      printf 'FC_GPU_TYPE=%q\n' "$FC_GPU_TYPE"
+      printf 'FC_GPU_MEMORY_SIZE=%q\n' "$FC_GPU_MEMORY_SIZE"
     fi
   } >"$temporary_result"
   chmod 600 "$temporary_result"
@@ -1064,7 +1057,7 @@ write_deployment_result() {
 
 configure_fc() {
   [[ "$CONFIGURE_FC" -eq 1 ]] || return
-  CURRENT_STEP='幂等配置并预热两个深圳 FC 函数'
+  CURRENT_STEP='幂等配置一个深圳 FC GPU 函数'
   FC_DEPLOYMENT_RESULT_FILE="$TRANSFER_ROOT/fc-deployment-result.json"
   local -a args=(
     --region "$FC_REGION"
@@ -1072,13 +1065,13 @@ configure_fc() {
     --oss-bucket "$OSS_BUCKET"
     --oss-prefix "$OSS_PREFIX"
     --oss-endpoint "$FC_OSS_ENDPOINT"
-    --segmenter-function "$FC_SEGMENTER_FUNCTION"
-    --generator-function "$FC_GENERATOR_FUNCTION"
-    --segmenter-image "$FC_SEGMENTER_IMAGE"
-    --generator-image "$FC_GENERATOR_IMAGE"
+    --function-name "$FC_FUNCTION_NAME"
+    --image "$FC_IMAGE"
     --trigger-name "$FC_TRIGGER_NAME"
-    --segmenter-provisioned-instances "$FC_SEGMENTER_PROVISIONED_INSTANCES"
-    --generator-provisioned-instances "$FC_GENERATOR_PROVISIONED_INSTANCES"
+    --provisioned-instances "$FC_PROVISIONED_INSTANCES"
+    --reserved-concurrency "$FC_RESERVED_CONCURRENCY"
+    --gpu-type "$FC_GPU_TYPE"
+    --gpu-memory-size "$FC_GPU_MEMORY_SIZE"
     --output "$FC_DEPLOYMENT_RESULT_FILE"
   )
   if [[ -n "$FC_ACR_INSTANCE_ID" ]]; then
@@ -1089,23 +1082,20 @@ configure_fc() {
     || die 'FC 配置完成但缺少回验结果 JSON'
   local verified_count
   verified_count="$(jq '[.functions[] | select(.verified == true)] | length' "$FC_DEPLOYMENT_RESULT_FILE")"
-  [[ "$verified_count" == '2' ]] || die 'FC 回验结果未包含两个已验证函数'
+  [[ "$verified_count" == '1' ]] || die 'FC 回验结果未包含唯一的已验证函数'
 }
 
 print_completion() {
-  local segmenter_url='' generator_url=''
+  local service_url=''
   if [[ "$CONFIGURE_FC" -eq 1 ]]; then
-    segmenter_url="$(jq -er '.functions[] | select(.kind == "segmenter") | .urlInternet // empty' "$FC_DEPLOYMENT_RESULT_FILE")" \
-      || die 'FC 回验结果缺少 SAM3 HTTP 公网 URL'
-    generator_url="$(jq -er '.functions[] | select(.kind == "generator") | .urlInternet // empty' "$FC_DEPLOYMENT_RESULT_FILE")" \
-      || die 'FC 回验结果缺少 SAM3D HTTP 公网 URL'
+    service_url="$(jq -er '.functions[] | select(.kind == "unified") | .urlInternet // empty' "$FC_DEPLOYMENT_RESULT_FILE")" \
+      || die 'FC 回验结果缺少组合服务 HTTP 公网 URL'
   fi
   cat <<EOF
 
 香港 ECS 全部动作已完成
 
-  SAM3D 镜像：       $REMOTE_IMAGE
-  SAM3 镜像：        $SEGMENTER_REMOTE_IMAGE
+  组合镜像：         $REMOTE_IMAGE
   OSS Bucket：       $OSS_BUCKET
   OSS Bucket 子目录：/$OSS_PREFIX
   FC 本地挂载目录：  /mnt/nas/sam3d
@@ -1116,12 +1106,10 @@ EOF
   if [[ "$CONFIGURE_FC" -eq 1 ]]; then
     cat <<EOF
   FC 回验 JSON：      $FC_DEPLOYMENT_RESULT_FILE
-  SAM3 触发器 URL：   $segmenter_url
-  SAM3D 触发器 URL：  $generator_url
+  组合服务 URL：      $service_url
 
 Demo 页面填写值：
-  SAM3_SEGMENTER_URL=$segmenter_url
-  SAM3D_GENERATOR_URL=$generator_url
+  SAM3D_SERVICE_URL=$service_url
 EOF
   else
     cat <<'EOF'
@@ -1158,12 +1146,10 @@ main() {
   prepare_offline_assets
   ensure_oss_access
   upload_offline_assets
-  build_images
+  build_image
   login_acr
-  push_one_image_with_retry "$LOCAL_IMAGE" "$REMOTE_IMAGE" 'SAM3D'
-  push_one_image_with_retry "$SEGMENTER_LOCAL_IMAGE" "$SEGMENTER_REMOTE_IMAGE" 'SAM3'
-  verify_remote_manifest "$REMOTE_IMAGE" 'SAM3D'
-  verify_remote_manifest "$SEGMENTER_REMOTE_IMAGE" 'SAM3'
+  push_one_image_with_retry "$LOCAL_IMAGE" "$REMOTE_IMAGE" 'SAM3/SAM3D 组合'
+  verify_remote_manifest "$REMOTE_IMAGE" 'SAM3/SAM3D 组合'
   configure_fc
   write_deployment_result
 

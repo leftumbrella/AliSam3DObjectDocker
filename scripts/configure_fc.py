@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently configure the SAM 3 and SAM 3D FC 3.0 functions.
+"""Idempotently configure one unified SAM 3 + SAM 3D FC 3.0 function.
 
 The deploy identity is resolved exclusively through the Alibaba Cloud SDK's
 default credential chain. This command never accepts AccessKey values as CLI
@@ -38,10 +38,8 @@ class DeploymentConfig:
     oss_prefix: str
     oss_endpoint: str
     mount_dir: str
-    segmenter_function: str
-    generator_function: str
-    segmenter_image: str
-    generator_image: str
+    function_name: str
+    image: str
     trigger_name: str
     trigger_auth: str
     acr_instance_id: str | None
@@ -52,8 +50,8 @@ class DeploymentConfig:
     gpu_type: str
     gpu_memory_size: int
     disk_size: int
-    segmenter_provisioned_instances: int
-    generator_provisioned_instances: int
+    provisioned_instances: int
+    reserved_concurrency: int
 
 
 class FCAPI(Protocol):
@@ -98,6 +96,14 @@ class FCAPI(Protocol):
         target: int,
     ) -> dict[str, Any]: ...
 
+    def get_concurrency_config(self, function_name: str) -> dict[str, Any] | None: ...
+
+    def put_concurrency_config(
+        self,
+        function_name: str,
+        spec: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
 
 def _validate_config(config: DeploymentConfig) -> None:
     if not REGION_PATTERN.fullmatch(config.region):
@@ -121,24 +127,14 @@ def _validate_config(config: DeploymentConfig) -> None:
         raise ConfigurationError("mount directory must be a non-root absolute path")
     if ".." in Path(config.mount_dir).parts:
         raise ConfigurationError("mount directory must not contain parent traversal")
-    for label, name in (
-        ("segmenter", config.segmenter_function),
-        ("generator", config.generator_function),
-    ):
-        if not FUNCTION_NAME_PATTERN.fullmatch(name):
-            raise ConfigurationError(f"invalid {label} function name: {name}")
-    if config.segmenter_function == config.generator_function:
-        raise ConfigurationError("segmenter and generator function names must differ")
+    if not FUNCTION_NAME_PATTERN.fullmatch(config.function_name):
+        raise ConfigurationError(f"invalid function name: {config.function_name}")
     if not FUNCTION_NAME_PATTERN.fullmatch(config.trigger_name):
         raise ConfigurationError(f"invalid trigger name: {config.trigger_name}")
-    for label, image in (
-        ("segmenter", config.segmenter_image),
-        ("generator", config.generator_image),
-    ):
-        if image.startswith(("http://", "https://")) or ":" not in image:
-            raise ConfigurationError(f"{label} image must be a tagged registry reference")
-        if any(character.isspace() for character in image):
-            raise ConfigurationError(f"{label} image contains whitespace")
+    if config.image.startswith(("http://", "https://")) or ":" not in config.image:
+        raise ConfigurationError("image must be a tagged registry reference")
+    if any(character.isspace() for character in config.image):
+        raise ConfigurationError("image contains whitespace")
     if config.trigger_auth not in {"anonymous", "function"}:
         raise ConfigurationError("trigger auth must be anonymous or function")
     if config.acr_instance_id and any(
@@ -153,18 +149,26 @@ def _validate_config(config: DeploymentConfig) -> None:
         raise ConfigurationError("FC CPU, memory, and GPU memory must be positive")
     if config.disk_size not in {512, 10240}:
         raise ConfigurationError("disk size must be 512 or 10240 MB")
-    for label, target in (
-        ("segmenter", config.segmenter_provisioned_instances),
-        ("generator", config.generator_provisioned_instances),
+    if (
+        not isinstance(config.provisioned_instances, int)
+        or isinstance(config.provisioned_instances, bool)
+        or not 0 <= config.provisioned_instances <= 100
     ):
-        if (
-            not isinstance(target, int)
-            or isinstance(target, bool)
-            or not 0 <= target <= 100
-        ):
-            raise ConfigurationError(
-                f"{label} provisioned instances must be an integer between 0 and 100"
-            )
+        raise ConfigurationError(
+            "provisioned instances must be an integer between 0 and 100"
+        )
+    if (
+        not isinstance(config.reserved_concurrency, int)
+        or isinstance(config.reserved_concurrency, bool)
+        or not 1 <= config.reserved_concurrency <= 100
+    ):
+        raise ConfigurationError(
+            "reserved concurrency must be an integer between 1 and 100"
+        )
+    if config.provisioned_instances > config.reserved_concurrency:
+        raise ConfigurationError(
+            "provisioned instances must not exceed reserved concurrency"
+        )
 
 
 def _common_environment() -> dict[str, str]:
@@ -181,27 +185,24 @@ def _common_environment() -> dict[str, str]:
     }
 
 
-def _segmenter_environment() -> dict[str, str]:
-    environment = _common_environment()
-    environment.update(
-        {
-            "SAM3_CHECKPOINT_PATH": "/mnt/nas/sam3d/sam3/sam3.pt",
-            "SAM3_MAX_IMAGE_PIXELS": "40000000",
-            "SAM3_MAX_POINTS": "64",
-            "SAM3_MAX_UPLOAD_MB": "20",
-            "SAM3_ROOT": "/opt/sam3",
-        }
-    )
-    return environment
-
-
-def _generator_environment() -> dict[str, str]:
+def _function_environment() -> dict[str, str]:
     environment = _common_environment()
     environment.update(
         {
             "ATTN_BACKEND": "sdpa",
+            "GPU_LOCK_PATH": "/tmp/sam3d-gpu.lock",
             "HF_HOME": "/mnt/nas/sam3d/cache/huggingface",
             "LIDRA_SKIP_INIT": "true",
+            "SAM3_CHECKPOINT_PATH": "/mnt/nas/sam3d/sam3/sam3.pt",
+            "SAM3_INTERNAL_PORT": "9001",
+            "SAM3_INTERNAL_REQUEST_TIMEOUT": "1800",
+            "SAM3_INTERNAL_STARTUP_TIMEOUT": "30",
+            "SAM3_INTERNAL_URL": "http://127.0.0.1:9001",
+            "SAM3_MAX_IMAGE_PIXELS": "40000000",
+            "SAM3_MAX_POINTS": "64",
+            "SAM3_MAX_UPLOAD_MB": "20",
+            "SAM3_PYTHON": "/opt/venv/bin/python",
+            "SAM3_ROOT": "/opt/sam3",
             "SAM3D_COMPILE": "false",
             "SAM3D_CONFIG_PATH": "/mnt/nas/sam3d/hf/pipeline.yaml",
             "SAM3D_MAX_IMAGE_PIXELS": "40000000",
@@ -219,11 +220,6 @@ def _generator_environment() -> dict[str, str]:
 
 def build_function_spec(
     config: DeploymentConfig,
-    *,
-    function_name: str,
-    image: str,
-    environment: dict[str, str],
-    description: str,
 ) -> dict[str, Any]:
     """Return the FC 2023-03-30 CreateFunction body as plain JSON data."""
 
@@ -238,7 +234,7 @@ def build_function_spec(
             "successThreshold": 1,
             "timeoutSeconds": 2,
         },
-        "image": image,
+        "image": config.image,
         "port": 9000,
     }
     if config.acr_instance_id:
@@ -247,10 +243,10 @@ def build_function_spec(
     return {
         "cpu": config.cpu,
         "customContainerConfig": container_config,
-        "description": description,
+        "description": "Unified SAM 3 point segmentation and SAM 3D generation service",
         "diskSize": config.disk_size,
-        "environmentVariables": environment,
-        "functionName": function_name,
+        "environmentVariables": _function_environment(),
+        "functionName": config.function_name,
         "gpuConfig": {
             "gpuMemorySize": config.gpu_memory_size,
             "gpuType": config.gpu_type,
@@ -300,44 +296,22 @@ def build_deployment_plan(config: DeploymentConfig) -> dict[str, Any]:
         "triggerName": config.trigger_name,
         "triggerType": "http",
     }
-    provision_specs = {
-        "segmenter": {
-            "alwaysAllocateCPU": True,
-            "alwaysAllocateGPU": True,
-            "defaultTarget": config.segmenter_provisioned_instances,
-        },
-        "generator": {
-            "alwaysAllocateCPU": True,
-            "alwaysAllocateGPU": True,
-            "defaultTarget": config.generator_provisioned_instances,
-        },
+    provision_spec = {
+        "alwaysAllocateCPU": True,
+        "alwaysAllocateGPU": True,
+        "defaultTarget": config.provisioned_instances,
     }
     return {
         "apiVersion": "2023-03-30",
         "region": config.region,
         "functions": [
             {
-                "kind": "segmenter",
-                "spec": build_function_spec(
-                    config,
-                    function_name=config.segmenter_function,
-                    image=config.segmenter_image,
-                    environment=_segmenter_environment(),
-                    description="SAM 3 point-prompt mask service",
-                ),
-                "provision": provision_specs["segmenter"],
-                "trigger": trigger,
-            },
-            {
-                "kind": "generator",
-                "spec": build_function_spec(
-                    config,
-                    function_name=config.generator_function,
-                    image=config.generator_image,
-                    environment=_generator_environment(),
-                    description="SAM 3D Objects image-and-mask generation service",
-                ),
-                "provision": provision_specs["generator"],
+                "concurrency": {
+                    "reservedConcurrency": config.reserved_concurrency,
+                },
+                "kind": "unified",
+                "spec": build_function_spec(config),
+                "provision": provision_spec,
                 "trigger": trigger,
             },
         ],
@@ -378,7 +352,7 @@ def _trigger_update_spec(create_spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def reconcile_deployment(config: DeploymentConfig, api: FCAPI) -> dict[str, Any]:
-    """Create or update both functions and triggers, then read them back."""
+    """Create or update the unified function and trigger, then read them back."""
 
     plan = build_deployment_plan(config)
     results: list[dict[str, Any]] = []
@@ -440,6 +414,28 @@ def reconcile_deployment(config: DeploymentConfig, api: FCAPI) -> dict[str, Any]
 
         http_trigger = actual_trigger.get("httpTrigger") or {}
 
+        concurrency_spec = target["concurrency"]
+        existing_concurrency = api.get_concurrency_config(function_name)
+        if existing_concurrency is None or _mismatches(
+            concurrency_spec,
+            existing_concurrency,
+        ):
+            api.put_concurrency_config(function_name, concurrency_spec)
+            concurrency_action = "created" if existing_concurrency is None else "updated"
+        else:
+            concurrency_action = "unchanged"
+        actual_concurrency = api.get_concurrency_config(function_name)
+        if actual_concurrency is None:
+            raise ConfigurationError(
+                f"FC concurrency config disappeared after write: {function_name}"
+            )
+        concurrency_errors = _mismatches(concurrency_spec, actual_concurrency)
+        if concurrency_errors:
+            raise ConfigurationError(
+                f"FC concurrency config readback mismatch for {function_name}: "
+                + "; ".join(concurrency_errors[:10])
+            )
+
         provision_spec = target["provision"]
         provision_target = int(provision_spec["defaultTarget"])
         existing_provision = api.get_provision_config(function_name)
@@ -487,6 +483,12 @@ def reconcile_deployment(config: DeploymentConfig, api: FCAPI) -> dict[str, Any]
 
         results.append(
             {
+                "concurrency": {
+                    "action": concurrency_action,
+                    "reservedConcurrency": actual_concurrency.get(
+                        "reservedConcurrency"
+                    ),
+                },
                 "functionAction": function_action,
                 "functionName": function_name,
                 "kind": target["kind"],
@@ -658,6 +660,26 @@ class AlibabaFCAPI:
             raise
         return self._map(response.body)
 
+    def get_concurrency_config(self, function_name: str) -> dict[str, Any] | None:
+        try:
+            response = self._client.get_concurrency_config(function_name)
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        return self._map(response.body)
+
+    def put_concurrency_config(
+        self,
+        function_name: str,
+        spec: dict[str, Any],
+    ) -> dict[str, Any]:
+        body = self._models.PutConcurrencyInput().from_map(spec)
+        request = self._models.PutConcurrencyConfigRequest(body=body)
+        return self._map(
+            self._client.put_concurrency_config(function_name, request).body
+        )
+
     def put_provision_config(
         self,
         function_name: str,
@@ -728,7 +750,7 @@ def _write_result(path: Path, result: dict[str, Any]) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create/update and verify the SAM3 segmenter and SAM3D generator FC functions."
+        description="Create/update and verify one unified SAM3 + SAM3D FC function."
     )
     parser.add_argument("--region", default="cn-shenzhen")
     parser.add_argument("--role-arn", required=True)
@@ -736,10 +758,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--oss-prefix", required=True)
     parser.add_argument("--oss-endpoint", default=DEFAULT_OSS_ENDPOINT)
     parser.add_argument("--mount-dir", default="/mnt/nas/sam3d")
-    parser.add_argument("--segmenter-function", default="sam3-segmenter")
-    parser.add_argument("--generator-function", default="sam3d-generator")
-    parser.add_argument("--segmenter-image", required=True)
-    parser.add_argument("--generator-image", required=True)
+    parser.add_argument("--function-name", default="sam3d-object")
+    parser.add_argument("--image", required=True)
     parser.add_argument("--trigger-name", default="http-trigger")
     parser.add_argument("--trigger-auth", choices=("anonymous", "function"), default="anonymous")
     parser.add_argument("--acr-instance-id")
@@ -750,8 +770,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-type", default="fc.gpu.ada.1")
     parser.add_argument("--gpu-memory-size", type=int, default=49152)
     parser.add_argument("--disk-size", type=int, default=10240)
-    parser.add_argument("--segmenter-provisioned-instances", type=int, default=1)
-    parser.add_argument("--generator-provisioned-instances", type=int, default=1)
+    parser.add_argument("--provisioned-instances", type=int, default=0)
+    parser.add_argument("--reserved-concurrency", type=int, default=1)
     parser.add_argument("--wait-timeout", type=int, default=900)
     parser.add_argument("--output", type=Path)
     parser.add_argument(
@@ -770,10 +790,8 @@ def _config_from_args(args: argparse.Namespace) -> DeploymentConfig:
         oss_prefix=args.oss_prefix.strip("/"),
         oss_endpoint=args.oss_endpoint,
         mount_dir=args.mount_dir,
-        segmenter_function=args.segmenter_function,
-        generator_function=args.generator_function,
-        segmenter_image=args.segmenter_image,
-        generator_image=args.generator_image,
+        function_name=args.function_name,
+        image=args.image,
         trigger_name=args.trigger_name,
         trigger_auth=args.trigger_auth,
         acr_instance_id=args.acr_instance_id,
@@ -784,8 +802,8 @@ def _config_from_args(args: argparse.Namespace) -> DeploymentConfig:
         gpu_type=args.gpu_type,
         gpu_memory_size=args.gpu_memory_size,
         disk_size=args.disk_size,
-        segmenter_provisioned_instances=args.segmenter_provisioned_instances,
-        generator_provisioned_instances=args.generator_provisioned_instances,
+        provisioned_instances=args.provisioned_instances,
+        reserved_concurrency=args.reserved_concurrency,
     )
 
 

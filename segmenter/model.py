@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from segmenter.settings import Settings
+from shared.gpu_lock import InterProcessGpuLock
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,12 +72,14 @@ class SegmenterManager:
         *,
         predictor_loader: PredictorLoader | None = None,
         inference_lock: asyncio.Lock | None = None,
+        gpu_lock: InterProcessGpuLock | None = None,
     ) -> None:
         self._settings = settings
         self._predictor_loader = predictor_loader or _load_sam3_predictor
         self._predictor: Any | None = None
         self._load_lock = asyncio.Lock()
         self._inference_lock = inference_lock or asyncio.Lock()
+        self._gpu_lock = gpu_lock or InterProcessGpuLock(settings.gpu_lock_path)
         self._load_error: str | None = None
         self._last_image_digest: str | None = None
 
@@ -153,27 +156,28 @@ class SegmenterManager:
         if predictor is None:
             raise SegmenterNotReadyError("SAM3 模型尚未初始化")
 
-        image_digest = _image_digest(image)
-        if image_digest != self._last_image_digest:
-            predictor.set_image(image)
-            self._last_image_digest = image_digest
+        with self._gpu_lock.acquire():
+            image_digest = _image_digest(image)
+            if image_digest != self._last_image_digest:
+                predictor.set_image(image)
+                self._last_image_digest = image_digest
 
-        point_coords = np.asarray(
-            [[point.x, point.y] for point in points],
-            dtype=np.float32,
-        )
-        point_labels = np.asarray(
-            [point.label for point in points],
-            dtype=np.int32,
-        )
-        masks, scores, _ = predictor.predict(
-            point_coords=point_coords,
-            point_labels=point_labels,
-            multimask_output=len(points) == 1,
-            return_logits=False,
-            normalize_coords=True,
-        )
-        return _select_best_mask(masks, scores, image.shape[:2])
+            point_coords = np.asarray(
+                [[point.x, point.y] for point in points],
+                dtype=np.float32,
+            )
+            point_labels = np.asarray(
+                [point.label for point in points],
+                dtype=np.int32,
+            )
+            masks, scores, _ = predictor.predict(
+                point_coords=point_coords,
+                point_labels=point_labels,
+                multimask_output=len(points) == 1,
+                return_logits=False,
+                normalize_coords=True,
+            )
+            return _select_best_mask(masks, scores, image.shape[:2])
 
 
 def _load_sam3_predictor(settings: Settings) -> Any:
