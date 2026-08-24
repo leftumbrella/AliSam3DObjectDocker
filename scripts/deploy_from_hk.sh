@@ -459,7 +459,7 @@ ossutil_is_compatible() {
   [[ -x "$candidate" ]] || return 1
   version_output="$("$candidate" version 2>/dev/null)" || return 1
   [[ "$version_output" == *"$OSSUTIL_VERSION"* ]] || return 1
-  help_output="$("$candidate" help cp 2>/dev/null)" || return 1
+  help_output="$("$candidate" cp --help 2>/dev/null)" || return 1
   grep -q -- '--checkpoint-dir' <<<"$help_output"
 }
 
@@ -498,7 +498,12 @@ ensure_ossutil() {
   install -m 0755 \
     "$temporary/ossutil-${OSSUTIL_VERSION}-linux-amd64/ossutil" \
     "$candidate"
-  ossutil_is_compatible "$candidate" || die 'ossutil 安装后命令契约检查失败'
+  if ! ossutil_is_compatible "$candidate"; then
+    warn "ossutil 契约检查失败，诊断输出如下（version / cp --help）"
+    "$candidate" version || true
+    "$candidate" cp --help || true
+    die "ossutil 安装后命令契约检查失败：需要 ${OSSUTIL_VERSION} 且 cp --help 含 --checkpoint-dir"
+  fi
   OSSUTIL_BIN=$candidate
   "$OSSUTIL_BIN" version
 }

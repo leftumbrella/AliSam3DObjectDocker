@@ -318,7 +318,7 @@ install -m 0755 \
   /usr/local/bin/ossutil
 
 ossutil version
-ossutil help cp | grep -q -- '--checkpoint-dir'
+ossutil cp --help | grep -q -- '--checkpoint-dir'
 ```
 
 如果官方版本已经更新，先从 [ossutil 官方安装文档](https://help.aliyun.com/zh/oss/install-ossutil2) 取得新下载地址和校验值，不要只改版本号而继续使用旧 SHA-256。

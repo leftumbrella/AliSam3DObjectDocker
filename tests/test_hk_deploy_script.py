@@ -207,6 +207,12 @@ class HongKongDeployScriptTests(unittest.TestCase):
             self.script,
         )
 
+    def test_ossutil_contract_uses_cobra_cp_help(self) -> None:
+        self.assertIn('"$candidate" cp --help', self.script)
+        self.assertNotIn('"$candidate" help cp', self.script)
+        self.assertIn("ossutil cp --help | grep -q -- '--checkpoint-dir'", self.deployment)
+        self.assertNotIn("ossutil help cp", self.deployment)
+
     def test_build_upload_and_manifest_safety_gates_are_present(self) -> None:
         for required in (
             "--platform linux/amd64",
