@@ -11,6 +11,8 @@
 
 从一台全新的香港 ECS 开始部署时，按 [阿里云 FC GPU 从零部署手册](DEPLOYMENT.md) 操作。手册包含服务器初始化、离线模型准备、OSS 上传、ACR 推送、FC 设置、验收和回滚。
 
+完成 `git clone` 后，也可以直接运行 `./scripts/deploy_from_hk.sh`，一次完成香港 ECS 上的依赖安装、资源准备、OSS 上传、镜像构建、ACR 推送和 Manifest 检查。
+
 ## 重要前提
 
 - SAM 3D Objects 官方要求 Linux 64 位和至少 32 GB GPU 显存。

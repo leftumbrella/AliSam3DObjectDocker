@@ -655,7 +655,7 @@ def prepare(args: argparse.Namespace) -> None:
     print(f"  TRANSFER_ROOT={quoted_root}")
     print("  OSS_BUCKET='your-real-shenzhen-bucket-name'")
     print("  : \"${OSS_BUCKET:?set OSS_BUCKET to the real OSS bucket name}\"")
-    print("  ossutil cp -r \"$TRANSFER_ROOT/storage/\" \"oss://${OSS_BUCKET}/sam3d/\" \\")
+    print("  ossutil cp -u -r \"$TRANSFER_ROOT/storage/\" \"oss://${OSS_BUCKET}/sam3d/\" \\")
     print("    --checkpoint-dir /root/oss-upload-checkpoints")
 
 
@@ -684,9 +684,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="perform no downloads or edits; verify an already prepared bundle",
     )
+    parser.add_argument(
+        "--verify-main-only",
+        action="store_true",
+        help="verify only the main checkpoint already copied under storage/hf",
+    )
     args = parser.parse_args()
-    if args.verify_only and (args.download_sam3d or args.sam3d_source):
-        parser.error("--verify-only cannot be combined with download/source options")
+    if args.verify_only and args.verify_main_only:
+        parser.error("--verify-only and --verify-main-only are mutually exclusive")
+    if (args.verify_only or args.verify_main_only) and (
+        args.download_sam3d or args.sam3d_source
+    ):
+        parser.error("verification modes cannot be combined with download/source options")
     return args
 
 
@@ -696,6 +705,11 @@ def main() -> int:
         transfer_root = validated_transfer_root(args.transfer_root)
         if args.verify_only:
             verify_bundle(transfer_root)
+        elif args.verify_main_only:
+            files = main_checkpoint_files(
+                transfer_root / "storage" / "hf" / "pipeline.yaml"
+            )
+            print(f"[verified] main checkpoint: {len(files)} referenced files")
         else:
             with preparation_lock(transfer_root):
                 prepare(args)

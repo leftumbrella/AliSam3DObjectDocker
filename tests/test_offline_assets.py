@@ -256,6 +256,7 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("--verify-only", help_result.stdout)
+        self.assertIn("--verify-main-only", help_result.stdout)
 
         with tempfile.TemporaryDirectory() as directory:
             verify_result = subprocess.run(
@@ -273,6 +274,22 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         self.assertEqual(verify_result.returncode, 1)
         self.assertIn("pipeline.yaml", verify_result.stderr)
         self.assertNotEqual(verify_result.stderr.strip(), "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            main_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--verify-main-only",
+                    "--transfer-root",
+                    directory,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(main_result.returncode, 1)
+        self.assertIn("pipeline.yaml", main_result.stderr)
 
     def test_documented_fc_offline_contract(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

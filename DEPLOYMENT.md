@@ -184,13 +184,75 @@ git rev-parse HEAD
 
 后续镜像标签使用当前 Git commit，确保 FC 上的镜像可以追溯到源码。
 
+## 推荐：一键完成香港 ECS 动作
+
+以下一条命令会完成香港 ECS 上的全部动作，包括系统工具和 Docker/Buildx 安装、Hugging Face 登录、离线资源准备与完整性检查、深圳 OSS 上传、镜像构建、深圳 ACR 登录与推送，以及远程 Manifest 门禁：
+
+```bash
+cd /root/AliSam3DObjectDocker
+./scripts/deploy_from_hk.sh
+```
+
+脚本会依次询问四项非敏感信息：
+
+- 深圳 OSS Bucket 名。
+- 深圳 ACR 公网域名。
+- ACR `namespace/repository`。
+- ACR 登录用户名。
+
+需要凭证时，脚本会调用 Hugging Face 官方登录流程，并隐藏读取 OSS AccessKey Secret、STS Token 和 ACR 密码。敏感值不接受命令行参数，不会写入 Git、镜像、部署结果或 Shell 历史。脚本创建的 Hugging Face 登录会在使用后退出，ACR 登录使用随脚本退出删除的临时 Docker 配置目录；交互输入的 OSS 凭证只存在于脚本进程。
+
+正式执行前可以先查看完整计划：
+
+```bash
+./scripts/deploy_from_hk.sh \
+  --dry-run \
+  --oss-bucket 'your-shenzhen-bucket' \
+  --acr-host 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com' \
+  --acr-repository 'namespace/sam3dobject' \
+  --acr-username 'your-acr-user'
+```
+
+默认交互模式在安装 `tmux` 后会自动把长任务转入独立会话，SSH 断开不会终止下载、构建或推送。若脚本检测到凭证环境变量，为避免把凭证复制进 tmux server 环境，它不会自动切换；这种情况下应先手动进入 `tmux`，再设置凭证和运行脚本。
+
+自动化环境可以使用无交互模式。下面通过隐藏输入把凭证放进当前 `tmux` 会话的环境，不把值写到命令行：
+
+```bash
+tmux new -s sam3d-deploy
+
+read -rsp 'HF read token: ' HF_TOKEN && printf '\n'
+read -rsp 'OSS AccessKey ID: ' OSS_ACCESS_KEY_ID && printf '\n'
+read -rsp 'OSS AccessKey Secret: ' OSS_ACCESS_KEY_SECRET && printf '\n'
+read -rsp 'ACR Registry password: ' ACR_PASSWORD && printf '\n'
+export HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET ACR_PASSWORD
+
+./scripts/deploy_from_hk.sh \
+  --non-interactive \
+  --yes \
+  --no-tmux \
+  --oss-bucket 'your-shenzhen-bucket' \
+  --acr-host 'crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com' \
+  --acr-repository 'namespace/sam3dobject' \
+  --acr-username 'your-acr-user'
+
+unset HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN ACR_PASSWORD
+```
+
+使用 STS 时，还需在运行前设置 `OSS_SESSION_TOKEN`。若主 checkpoint 已经存在，可以增加 `--sam3d-source /实际路径/checkpoints`，脚本将校验并复用该目录。
+
+脚本要求当前 Git checkout 没有已修改或未跟踪文件，避免把无法追溯的内容带入构建上下文。它可以安全重跑：中断的 Hugging Face 主模型下载会继续补齐，离线文件通过固定大小和 SHA-256 复用，OSS 使用内容哈希版本前缀和断点目录，Buildx 使用层缓存，`docker push` 复用已经上传的层。同一 Git 标签若已指向完全相同的镜像会跳过推送；若指向不同镜像，脚本会拒绝覆盖，避免静默改写 FC 已使用的版本。
+
+成功后会生成仅含非敏感值的 `/root/sam3d-transfer/deployment-result.env`，其中包括完整镜像地址、OSS Bucket 子目录、FC 挂载目录和端口。脚本不会修改 FC；拿到结果后继续执行本手册的“创建深圳 FC GPU 函数”部分。
+
+后面的香港 ECS 分步命令保留为审计和故障排查路径。正常部署优先使用一键脚本。
+
 ## 准备完整离线模型资源
 
 用独立 Python 虚拟环境安装 Hugging Face CLI：
 
 ```bash
 python3 -m venv /opt/sam3d-tools
-/opt/sam3d-tools/bin/python -m pip install --upgrade pip huggingface_hub
+/opt/sam3d-tools/bin/python -m pip install 'huggingface_hub==1.27.0'
 export PATH="/opt/sam3d-tools/bin:$PATH"
 
 hf version
@@ -268,7 +330,7 @@ install -m 0755 \
   "ossutil-${OSSUTIL_VERSION}-linux-amd64/ossutil" \
   /usr/local/bin/ossutil
 
-ossutil --version
+ossutil version
 ossutil help cp | grep -q -- '--checkpoint-dir'
 ```
 
@@ -300,7 +362,8 @@ chmod 600 /root/.ossutilconfig 2>/dev/null || true
 
 ```bash
 export OSS_BUCKET=''
-export ASSET_RELEASE="bundle-$(git rev-parse --short=12 HEAD)"
+export ASSET_DIGEST="$(sha256sum "$TRANSFER_ROOT/storage/offline-assets.sha256" | cut -c1-12)"
+export ASSET_RELEASE="bundle-${ASSET_DIGEST}"
 export OSS_PREFIX="sam3d/releases/${ASSET_RELEASE}"
 
 : "${OSS_BUCKET:?请填写深圳 OSS Bucket 名称}"
@@ -318,7 +381,7 @@ ossutil ls "oss://${OSS_BUCKET}/"
 上传 `storage/` 目录的内容。模型约 14 GB，命令中断后可以原样重跑：
 
 ```bash
-ossutil cp -r \
+ossutil cp -u -r \
   "$TRANSFER_ROOT/storage/" \
   "oss://${OSS_BUCKET}/${OSS_PREFIX}/" \
   --checkpoint-dir /root/oss-upload-checkpoints
