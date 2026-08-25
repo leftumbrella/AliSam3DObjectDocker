@@ -39,9 +39,9 @@ def main() -> int:
     if public_port == internal_port:
         raise ValueError("PORT and SAM3_INTERNAL_PORT must differ")
 
-    sam3_python = Path(os.getenv("SAM3_PYTHON", "/opt/venv/bin/python"))
-    if not sam3_python.is_file():
-        raise RuntimeError(f"SAM3 Python runtime not found: {sam3_python}")
+    unified_python = Path(sys.executable)
+    if not unified_python.is_file():
+        raise RuntimeError(f"Unified Python runtime not found: {unified_python}")
 
     base_environment = os.environ.copy()
     segmenter_environment = dict(base_environment)
@@ -60,7 +60,7 @@ def main() -> int:
     try:
         processes.append(
             subprocess.Popen(
-                [str(sam3_python), "-m", "segmenter.serve"],
+                [str(unified_python), "-m", "segmenter.serve"],
                 env=segmenter_environment,
             )
         )

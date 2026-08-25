@@ -470,7 +470,8 @@ print_plan() {
   CUDA 编译并发： MAX_JOBS=${MAX_JOBS}，NVCC_THREADS=${NVCC_THREADS}
 
 脚本将安装基础工具和 Docker/Buildx，准备并校验 SAM3/SAM3D 离线资源，
-上传深圳 OSS，构建一张包含两个隔离运行时的 linux/amd64 镜像，推送 ACR 并检查 Manifest。
+上传深圳 OSS，构建一张让两个服务进程共用 Python 3.12 / PyTorch 2.7.1 / CUDA 12.6
+环境的 linux/amd64 镜像，推送 ACR 并检查 Manifest。
 EOF
 
   if [[ "$CONFIGURE_FC" -eq 1 ]]; then

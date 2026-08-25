@@ -6,12 +6,12 @@
 
 ## 当前架构
 
-一个组合镜像内保留两个相互隔离的 Python 运行环境，因为两套上游依赖并不兼容：
+一个组合镜像只保留一套以 SAM 3 为基线的 Python/CUDA 用户态环境：
 
-- SAM 3：Python 3.12、PyTorch 2.7.1 + cu126，内部进程监听 `127.0.0.1:9001`。
-- SAM 3D Objects：Python 3.11、PyTorch 2.5.1 + cu121，公网网关监听 FC 的 `0.0.0.0:9000`。
+- 统一版本为 Python 3.12、PyTorch 2.7.1 + cu126；PyTorch3D、gsplat 与 spconv 也统一到 CUDA 12.6 ABI。
+- SAM 3 内部进程监听 `127.0.0.1:9001`；SAM 3D Objects 网关监听 FC 的 `0.0.0.0:9000`。
 - `app.supervisor` 同时管理两个进程；任何一个进程退出，容器都会退出并由 FC 重建。
-- FC Initializer 调用公网进程的 `POST /initialize`，并行初始化两套模型。只有两者均成功，实例才算初始化完成。
+- FC Initializer 调用公网进程的 `POST /initialize`；两个进程共用 GPU 文件锁，因此两套模型的 GPU 加载会串行执行。只有两者均成功，实例才算初始化完成。
 - `/segment` 和 `/generate` 由同一个公网入口提供；内部 SAM 3 端口不会暴露给 FC 触发器。
 
 ```text
@@ -53,7 +53,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 - 单实例并发 `instanceConcurrency=1`：同一实例一次只接收一个业务请求。
 - 应用层再使用共享异步锁和跨进程文件锁，防止未来配置漂移或内部调用重叠。
 
-最小实例数为 0 时，弹性创建的新实例仍会自动执行 FC Initializer，同时加载两个模型；冷启动耗时和 300 秒 Initializer 上限需要实测。若设为 1，部署脚本会等待组合实例初始化完成，但该 GPU 会持续保留并产生费用。
+最小实例数为 0 时，弹性创建的新实例仍会自动执行 FC Initializer，依次加载两个模型；冷启动耗时和 300 秒 Initializer 上限需要实测。若设为 1，部署脚本会等待组合实例初始化完成，但该 GPU 会持续保留并产生费用。
 
 ## 项目结构
 
@@ -63,7 +63,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 │   ├── main.py              # 单一公网 API：状态、分割代理、3D 生成
 │   ├── model.py             # SAM3D 初始化、推理和导出
 │   ├── segmenter_client.py  # 仅允许 loopback 的 SAM3 HTTP 客户端
-│   ├── supervisor.py        # 启动并监管两个隔离运行时
+│   ├── supervisor.py        # 用同一 Python 环境启动并监管两个服务进程
 │   └── settings.py
 ├── segmenter/               # SAM3 内部服务与点选推理
 ├── shared/gpu_lock.py       # 两个进程共用的 GPU 文件锁
@@ -72,7 +72,8 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 │   ├── configure_fc.py      # 幂等配置一个 FC 函数
 │   ├── fc_initializer.sh    # FC Initializer 回调
 │   └── prepare_offline_assets.py
-├── Dockerfile               # 一张镜像、两个 Python 环境
+├── constraints-unified.txt  # 防止普通 PyPI 解析器替换 cu126 Torch ABI
+├── Dockerfile               # 一张镜像、一套 Python/CUDA 环境
 ├── test-client.html         # 单地址浏览器测试台
 └── DEPLOYMENT.md
 ```
@@ -98,7 +99,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 ## 手动构建
 
-组合镜像固定使用两个上游 commit。FC 自定义容器只接受兼容的 `linux/amd64` 镜像清单，构建时必须关闭 provenance 和 SBOM attestation：
+组合镜像固定 SAM 3、SAM 3D Objects 及两个 CUDA 扩展的上游提交。FC 自定义容器只接受兼容的 `linux/amd64` 镜像清单，构建时必须关闭 provenance 和 SBOM attestation：
 
 ```bash
 docker buildx build \
@@ -148,7 +149,7 @@ docker manifest inspect --verbose "$REMOTE_IMAGE" | grep -q 'unknown/unknown' &&
 | GET | `/healthz` | 仅检查公网进程是否存活 |
 | GET | `/readyz` | 聚合 SAM3 与 SAM3D 的加载状态 |
 | GET | `/gpu` | 聚合两个运行时的 CUDA 版本与显存指标 |
-| POST | `/initialize` | 仅供 FC Initializer 调用，同时加载两个模型 |
+| POST | `/initialize` | 仅供 FC Initializer 调用，串行完成两套模型的 GPU 加载 |
 | POST | `/segment` | 原图 + 点选 JSON，返回 PNG Mask |
 | POST | `/generate` | 原图 + Mask，返回 PLY 或 GLB |
 | POST | `/invoke` | 提示使用同一 HTTP 触发器的业务路由 |
@@ -183,7 +184,6 @@ curl -fS -X POST "$FC_URL/generate" \
 | `SAM3_CHECKPOINT_PATH` | `/mnt/nas/sam3d/sam3/sam3.pt` | SAM3 权重 |
 | `SAM3_INTERNAL_URL` | `http://127.0.0.1:9001` | 内部服务，只接受 loopback origin |
 | `SAM3_INTERNAL_PORT` | `9001` | 内部 SAM3 端口 |
-| `SAM3_PYTHON` | `/opt/venv/bin/python` | SAM3 独立运行时 |
 | `GPU_LOCK_PATH` | `/tmp/sam3d-gpu.lock` | 两个进程共用的推理锁 |
 | `PORT` | `9000` | FC 自定义容器公网端口 |
 | `FC_INITIALIZER_HTTP_TIMEOUT` | `295` | 初始化回调超时，低于 FC 300 秒上限 |
@@ -207,7 +207,7 @@ curl -fS -X POST "$FC_URL/generate" \
 
 - FC Initializer 最长 300 秒；两个模型都会在这个生命周期阶段初始化。
 - 默认弹性配置只允许一个实例。如果将 reserved concurrency 调高，跨进程文件锁只保护单个容器，不能跨 FC 实例互斥。
-- 两个 CUDA/PyTorch 运行时会增加组合镜像和常驻显存；脚本会检查镜像大小，但显存只能在目标 GPU 上确认。
+- 统一环境消除了重复的 Python/PyTorch/CUDA 用户态依赖，但两个服务进程仍各自创建 CUDA context，并且两套模型权重仍会常驻显存；显存只能在目标 GPU 上确认。
 - `CORS_ALLOW_ORIGINS=*` 适合匿名测试触发器；生产环境应限制 Origin，并选择符合业务要求的触发器认证方式。
 - 项目不自动删除旧函数或旧镜像。组合函数验证成功后，再按部署手册的迁移步骤人工清理。
 

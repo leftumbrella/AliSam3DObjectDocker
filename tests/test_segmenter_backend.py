@@ -87,6 +87,31 @@ class FakePredictor:
 
 
 class SegmenterManagerTests(unittest.TestCase):
+    def test_initializer_holds_the_shared_gpu_lock_while_loading(self) -> None:
+        events: list[str] = []
+
+        class RecordingLock:
+            def acquire(self) -> RecordingLock:
+                events.append("acquire")
+                return self
+
+            def __enter__(self) -> None:
+                events.append("enter")
+
+            def __exit__(self, *_args: object) -> None:
+                events.append("exit")
+
+        with tempfile.TemporaryDirectory() as directory:
+            manager = SegmenterManager(  # type: ignore[arg-type]
+                _settings(Path(directory)),
+                predictor_loader=lambda _settings: events.append("load")
+                or FakePredictor(),
+                gpu_lock=RecordingLock(),
+            )
+            manager._load_model()
+
+        self.assertEqual(events, ["acquire", "enter", "load", "exit"])
+
     def test_tracker_checkpoint_mapping_is_prefix_strict(self) -> None:
         mapped = _tracker_state_dict(
             {

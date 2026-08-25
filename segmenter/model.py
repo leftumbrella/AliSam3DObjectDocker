@@ -137,6 +137,10 @@ class SegmenterManager:
                 raise
 
     def _load_model(self) -> None:
+        with self._gpu_lock.acquire():
+            self._load_model_locked()
+
+    def _load_model_locked(self) -> None:
         predictor = self._predictor_loader(self._settings)
         if not callable(getattr(predictor, "set_image", None)):
             raise TypeError("SAM3 predictor 缺少 set_image 方法")

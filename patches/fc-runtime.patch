@@ -2,15 +2,16 @@ diff --git a/notebook/inference.py b/notebook/inference.py
 index 94e99a7..873c625 100644
 --- a/notebook/inference.py
 +++ b/notebook/inference.py
-@@ -5,7 +5,6 @@ import os
- os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
+@@ -4,3 +4,1 @@
+-# not ideal to put that here
+-os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
  os.environ["LIDRA_SKIP_INIT"] = "true"
- 
+@@ -8,4 +6,3 @@
 -import sys
  from typing import Union, Optional, List, Callable
  import numpy as np
  from PIL import Image
-@@ -16,14 +15,7 @@ import math
+@@ -16,14 +13,7 @@ import math
  import utils3d
  import shutil
  import subprocess
@@ -25,7 +26,7 @@ index 94e99a7..873c625 100644
  import builtins
  from pytorch3d.transforms import quaternion_multiply, quaternion_invert
  
-@@ -31,8 +23,6 @@ import sam3d_objects  # REMARK(Pierre) : do not remove this import
+@@ -31,8 +21,6 @@ import sam3d_objects  # REMARK(Pierre) : do not remove this import
  from sam3d_objects.pipeline.inference_pipeline_pointmap import InferencePipelinePointMap
  from sam3d_objects.model.backbone.tdfy_dit.utils import render_utils
  
@@ -34,7 +35,7 @@ index 94e99a7..873c625 100644
  __all__ = ["Inference"]
  
  WHITELIST_FILTERS = [
-@@ -253,6 +243,8 @@ def normalized_gaussian(scene_gs, in_place=False, outlier_percentile=None):
+@@ -253,6 +241,8 @@ def normalized_gaussian(scene_gs, in_place=False, outlier_percentile=None):
  
  
  def make_scene(*outputs, in_place=False):
@@ -43,7 +44,7 @@ index 94e99a7..873c625 100644
      if not in_place:
          outputs = [deepcopy(output) for output in outputs]
  
-@@ -379,6 +371,9 @@ def load_masks(folder_path, indices_list=None, extension=".png"):
+@@ -379,6 +369,9 @@ def load_masks(folder_path, indices_list=None, extension=".png"):
  
  
  def display_image(image, masks=None):
@@ -53,7 +54,7 @@ index 94e99a7..873c625 100644
      def imshow(image, ax):
          ax.axis("off")
          ax.imshow(image)
-@@ -405,6 +400,8 @@ def display_image(image, masks=None):
+@@ -405,6 +398,8 @@ def display_image(image, masks=None):
  
  
  def interactive_visualizer(ply_path):

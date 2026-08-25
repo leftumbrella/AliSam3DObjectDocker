@@ -201,7 +201,6 @@ def _function_environment() -> dict[str, str]:
             "SAM3_MAX_IMAGE_PIXELS": "40000000",
             "SAM3_MAX_POINTS": "64",
             "SAM3_MAX_UPLOAD_MB": "20",
-            "SAM3_PYTHON": "/opt/venv/bin/python",
             "SAM3_ROOT": "/opt/sam3",
             "SAM3D_COMPILE": "false",
             "SAM3D_CONFIG_PATH": "/mnt/nas/sam3d/hf/pipeline.yaml",

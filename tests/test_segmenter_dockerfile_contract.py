@@ -11,8 +11,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile"
 REQUIREMENTS = ROOT / "requirements-segmenter.txt"
+FC_REQUIREMENTS = ROOT / "requirements-fc.txt"
 INITIALIZER = ROOT / "scripts" / "fc_initializer.sh"
 ASSETS = ROOT / "scripts" / "prepare_offline_assets.py"
+SUPERVISOR = ROOT / "app" / "supervisor.py"
 
 
 class SegmenterDockerfileContractTests(unittest.TestCase):
@@ -20,14 +22,27 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.dockerfile = DOCKERFILE.read_text(encoding="utf-8")
         cls.requirements = REQUIREMENTS.read_text(encoding="utf-8")
+        cls.fc_requirements = FC_REQUIREMENTS.read_text(encoding="utf-8")
         cls.initializer = INITIALIZER.read_text(encoding="utf-8")
         cls.assets = ASSETS.read_text(encoding="utf-8")
+        cls.supervisor = SUPERVISOR.read_text(encoding="utf-8")
 
-    def test_segmenter_runtime_is_python312_torch27_cuda126(self) -> None:
-        self.assertGreaterEqual(self.dockerfile.count("FROM python:3.12-slim-bookworm"), 2)
+    def test_unified_runtime_is_python312_torch27_cuda126(self) -> None:
+        self.assertIn(
+            "FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS unified-builder",
+            self.dockerfile,
+        )
+        self.assertIn("FROM ubuntu:22.04 AS runtime", self.dockerfile)
+        self.assertEqual(self.dockerfile.count("\nFROM "), 1)
+        self.assertIn("micromamba create -y -p /opt/venv", self.dockerfile)
+        self.assertIn("python=3.12.11", self.dockerfile)
         self.assertIn("torch==2.7.1+cu126", self.dockerfile)
         self.assertIn("torchvision==0.22.1+cu126", self.dockerfile)
         self.assertIn("/whl/cu126", self.dockerfile)
+        self.assertNotIn("torch==2.5.1", self.dockerfile)
+        self.assertNotIn("cu121", self.dockerfile)
+        self.assertNotIn("segmenter-builder", self.dockerfile)
+        self.assertNotIn("sam3d-builder", self.dockerfile)
         self.assertRegex(self.dockerfile, r"ARG SAM3_REF=[0-9a-f]{40}")
 
     def test_actual_model_builder_import_dependencies_are_explicit_and_gated(self) -> None:
@@ -45,18 +60,30 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
             self.dockerfile,
         )
 
-    def test_both_runtimes_are_isolated_inside_one_image(self) -> None:
+    def test_both_services_share_one_runtime_inside_one_image(self) -> None:
         self.assertIn("COPY segmenter /srv/segmenter", self.dockerfile)
         self.assertIn("COPY app /srv/app", self.dockerfile)
         self.assertIn("COPY shared /srv/shared", self.dockerfile)
-        self.assertIn("COPY --from=segmenter-builder /opt/venv /opt/venv", self.dockerfile)
-        self.assertIn("COPY --from=segmenter-builder /opt/sam3 /opt/sam3", self.dockerfile)
+        self.assertIn("COPY --from=unified-builder /opt/venv /opt/venv", self.dockerfile)
+        self.assertIn(
+            "COPY --from=unified-builder /opt/sam-3d-objects /opt/sam-3d-objects",
+            self.dockerfile,
+        )
+        self.assertIn("COPY --from=unified-builder /opt/sam3 /opt/sam3", self.dockerfile)
+        self.assertNotIn("SAM3_PYTHON", self.dockerfile)
+        self.assertNotIn("SAM3_PYTHON", self.supervisor)
+        self.assertIn('[str(unified_python), "-m", "segmenter.serve"]', self.supervisor)
+        self.assertIn('[sys.executable, "-m", "app.serve"]', self.supervisor)
         self.assertIn(
             "SAM3_CHECKPOINT_PATH=/mnt/nas/sam3d/sam3/sam3.pt",
             self.dockerfile,
         )
         self.assertIn('CMD ["python", "-m", "app.supervisor"]', self.dockerfile)
         self.assertFalse((ROOT / "Dockerfile.segmenter").exists())
+
+    def test_sparse_runtime_uses_the_same_cuda126_family(self) -> None:
+        self.assertIn("spconv-cu126==2.3.8", self.fc_requirements)
+        self.assertNotIn("spconv-cu121", self.fc_requirements)
 
     def test_checkpoint_pin_is_traceable_and_separate_from_source_pin(self) -> None:
         self.assertIn("huggingface.co/api/models/facebook/sam3/revision/", self.assets)

@@ -119,6 +119,10 @@ class ModelManager:
                 raise
 
     def _load_model(self) -> None:
+        with self._gpu_lock.acquire():
+            self._load_model_locked()
+
+    def _load_model_locked(self) -> None:
         config_path = self._settings.config_path
         if not config_path.is_file():
             raise ModelNotReadyError(

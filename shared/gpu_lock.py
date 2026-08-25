@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 class InterProcessGpuLock:
-    """Serialize GPU work across the isolated SAM3 and SAM3D processes."""
+    """Serialize GPU work across the SAM3 and SAM3D service processes."""
 
     def __init__(self, path: Path) -> None:
         if not path.is_absolute() or path == Path("/"):

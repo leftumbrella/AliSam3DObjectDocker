@@ -1,5 +1,6 @@
-# SAM 3 image inference runtime. Torch/torchvision and the pinned SAM 3 source
-# checkout are installed separately by the segmenter-builder stage in Dockerfile.
+# SAM 3 image inference dependencies installed into the shared unified runtime.
+# Torch/torchvision, their matching Linux Triton wheel, and the pinned SAM 3
+# source are installed separately.
 fastapi==0.116.1
 einops==0.8.1
 ftfy==6.1.1

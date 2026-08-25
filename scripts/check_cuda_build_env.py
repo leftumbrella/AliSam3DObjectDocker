@@ -1,4 +1,4 @@
-"""Fail fast when the activated Conda CUDA toolchain cannot compile headers."""
+"""Fail fast when the unified CUDA toolchain cannot compile extensions."""
 
 from __future__ import annotations
 
@@ -10,10 +10,7 @@ import shutil
 import subprocess
 
 
-TARGETS = {
-    "x86_64": "x86_64-linux",
-    "amd64": "x86_64-linux",
-}
+SUPPORTED_MACHINES = {"x86_64", "amd64"}
 
 
 def _required_env_path(name: str) -> Path:
@@ -25,16 +22,28 @@ def _required_env_path(name: str) -> Path:
 
 def main() -> None:
     machine = platform.machine().lower()
-    target = TARGETS.get(machine)
-    if target is None:
+    if machine not in SUPPORTED_MACHINES:
         raise SystemExit(f"不支持的 CUDA 构建架构：{machine}")
 
-    conda_prefix = _required_env_path("CONDA_PREFIX")
     cuda_home = _required_env_path("CUDA_HOME")
-    target_include = conda_prefix / "targets" / target / "include"
-    runtime_header = target_include / "cuda_runtime_api.h"
-    if not runtime_header.is_file():
-        raise SystemExit(f"Conda CUDA 运行时头文件不存在：{runtime_header}")
+    conda_prefix = _required_env_path("CONDA_PREFIX")
+    include_candidates = (
+        cuda_home / "include",
+        cuda_home / "targets" / "x86_64-linux" / "include",
+        conda_prefix / "targets" / "x86_64-linux" / "include",
+    )
+    include_dir = next(
+        (
+            candidate
+            for candidate in include_candidates
+            if (candidate / "cuda_runtime_api.h").is_file()
+        ),
+        None,
+    )
+    if include_dir is None:
+        searched = ", ".join(str(path) for path in include_candidates)
+        raise SystemExit(f"CUDA 运行时头文件不存在，已检查：{searched}")
+    runtime_header = include_dir / "cuda_runtime_api.h"
 
     nvcc = cuda_home / "bin" / "nvcc"
     if not nvcc.is_file():
@@ -49,7 +58,15 @@ def main() -> None:
         compiler_flags.extend(shlex.split(os.environ.get(variable, "")))
 
     probe = subprocess.run(
-        [*cxx_command, *compiler_flags, "-E", "-x", "c++", "-"],
+        [
+            *cxx_command,
+            *compiler_flags,
+            f"-I{include_dir}",
+            "-E",
+            "-x",
+            "c++",
+            "-",
+        ],
         input="#include <cuda_runtime_api.h>\n",
         text=True,
         stdout=subprocess.DEVNULL,
@@ -59,7 +76,7 @@ def main() -> None:
     if probe.returncode != 0:
         raise SystemExit(
             "已安装 CUDA 头文件，但当前 C++ 编译环境无法发现它。"
-            "请通过 micromamba run/activate 执行 CUDA 扩展构建。\n"
+            "请检查 CUDA_HOME、编译器和 include 路径。\n"
             + probe.stderr.strip()
         )
 

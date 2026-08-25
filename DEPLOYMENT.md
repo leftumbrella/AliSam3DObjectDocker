@@ -27,7 +27,7 @@ FC 配置把 `instanceConcurrency` 设为 1，并把函数级 `reservedConcurren
 
 建议使用全新的 Ubuntu 22.04 x86_64 ECS，并准备：
 
-- 足够容纳 Docker 构建缓存和两套 Python/CUDA 用户态环境的系统盘。
+- 足够容纳 Docker 构建缓存和一套 Python 3.12 / PyTorch 2.7.1 / CUDA 12.6 用户态环境的系统盘。
 - 可访问 GitHub、Hugging Face、PyPI、PyTorch wheel 和深圳公网 OSS/ACR 的网络。
 - Docker Buildx。构建过程不要求本机承担最终推理，但 CUDA 扩展构建较重。
 - 一个不会在 SSH 断开后继续运行的普通前台终端；脚本可重跑并复用下载、OSS 断点和镜像层。
@@ -229,7 +229,7 @@ HF_HUB_DISABLE_TELEMETRY=1
 
 ## 构建 FC 组合镜像
 
-只有一条正式构建命令；两套运行时都在同一个 Dockerfile 中。以下命令也是 FC 镜像清单契约：
+只有一条正式构建命令；SAM 3 与 SAM 3D Objects 共用 Dockerfile 中同一套 Python 3.12 / PyTorch 2.7.1 / CUDA 12.6 环境。以下命令也是 FC 镜像清单契约：
 
 ```bash
 docker buildx build \
@@ -300,7 +300,7 @@ python3 scripts/configure_fc.py \
 
 ## 显存与初始化验收
 
-组合函数的 Initializer 会初始化两个模型。空闲时 GPU 利用率会下降，但两套权重、两个 CUDA context 和缓存仍占显存。安全条件不是“推理不同时发生”这么简单，而是：
+组合函数的 Initializer 会初始化两个模型。两条初始化任务可以同时被触发，但共享 GPU 文件锁会让实际模型加载串行执行，避免两次初始化峰值重叠；代价是 300 秒上限必须容纳两套模型的总加载时间。空闲时 GPU 利用率会下降，但两套权重、两个 CUDA context 和缓存仍占显存。安全条件不是“推理不同时发生”这么简单，而是：
 
 ```text
 SAM3 常驻 + SAM3D 常驻 + CUDA context/缓存
@@ -364,13 +364,13 @@ curl -fS "$FC_URL/gpu"
 ## 常见错误
 
 - `/healthz` 成功而 `/readyz` 失败：优先检查 `/mnt/nas/sam3d/hf/pipeline.yaml`、`sam3/sam3.pt` 与 OSS 挂载前缀。
-- Initializer 超过 300 秒：查看两个模型各自加载日志；使用预留实例重复测量，必要时优化资源或调整架构。
+- Initializer 超过 300 秒：查看两个模型串行加载的各自耗时；使用预留实例重复测量，必要时优化资源或调整架构。
 - 初始化 OOM：两套常驻权重已经超过规格，不是并发锁问题。
 - `/generate` OOM 而 `/segment` 正常：组合常驻显存加 SAM3D 峰值超过规格。
 - 出现多个 GPU 实例：检查 `reservedConcurrency=1` 和 `instanceConcurrency=1` 是否被外部配置覆盖。
 - FC 拒绝镜像平台：确认只有 `linux/amd64`，且没有 `unknown/unknown` attestation。
 - 香港上传 OSS 超时：确认使用公网 Endpoint；FC 挂载才使用深圳内网 Endpoint。
-- 镜像超过 15 GB：检查两套运行时裁剪结果；不能靠增大 FC 磁盘绕过自定义容器镜像限制。
+- 镜像超过 15 GB：检查统一运行时、CUDA 扩展和残留构建产物；不能靠增大 FC 磁盘绕过自定义容器镜像限制。
 
 ## 最终检查清单
 

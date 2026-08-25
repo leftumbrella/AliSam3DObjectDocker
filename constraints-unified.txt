@@ -1,0 +1,5 @@
+# Keep the ordinary PyPI dependency resolver on the CUDA ABI installed from
+# the dedicated PyTorch cu126 index earlier in Dockerfile.
+torch==2.7.1+cu126
+torchvision==0.22.1+cu126
+triton==3.3.1

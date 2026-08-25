@@ -187,6 +187,7 @@ class FCConfigureTests(unittest.TestCase):
             "/mnt/nas/sam3d/hf/pipeline.yaml",
         )
         self.assertEqual(environment["GPU_LOCK_PATH"], "/tmp/sam3d-gpu.lock")
+        self.assertNotIn("SAM3_PYTHON", environment)
 
     def test_reconcile_is_idempotent_and_waits_for_combined_initializer(self) -> None:
         api = FakeFCAPI()

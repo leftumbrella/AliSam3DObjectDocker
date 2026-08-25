@@ -30,6 +30,34 @@ def _settings(root: Path) -> Settings:
 
 
 class Sam3DModelLifecycleTests(unittest.TestCase):
+    def test_initializer_holds_the_shared_gpu_lock_while_loading(self) -> None:
+        events: list[str] = []
+
+        class RecordingLock:
+            def acquire(self) -> RecordingLock:
+                events.append("acquire")
+                return self
+
+            def __enter__(self) -> None:
+                events.append("enter")
+
+            def __exit__(self, *_args: object) -> None:
+                events.append("exit")
+
+        with tempfile.TemporaryDirectory() as directory:
+            manager = ModelManager(  # type: ignore[arg-type]
+                _settings(Path(directory)),
+                gpu_lock=RecordingLock(),
+            )
+            with patch.object(
+                manager,
+                "_load_model_locked",
+                side_effect=lambda: events.append("load"),
+            ):
+                manager._load_model()
+
+        self.assertEqual(events, ["acquire", "enter", "load", "exit"])
+
     def test_generate_never_initializes_model_from_a_business_request(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manager = ModelManager(_settings(Path(directory)))
