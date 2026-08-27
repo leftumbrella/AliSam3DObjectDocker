@@ -289,7 +289,7 @@ def build_deployment_plan(config: DeploymentConfig) -> dict[str, Any]:
         sort_keys=True,
     )
     trigger = {
-        "description": "Browser/API HTTP entrypoint managed by deploy_from_hk.sh",
+        "description": "Browser/API HTTP entrypoint managed by configure_fc.py",
         "qualifier": "LATEST",
         "triggerConfig": trigger_config,
         "triggerName": config.trigger_name,

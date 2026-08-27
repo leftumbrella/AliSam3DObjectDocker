@@ -2,7 +2,7 @@
 
 本项目把 SAM 3 点选分割和 SAM 3D Objects 重建放进同一个阿里云函数计算（FC）GPU 函数。浏览器只配置一个 HTTP 地址：鼠标点选调用 `POST /segment` 得到 Mask，再把原图和 Mask 交给同一地址的 `POST /generate`，返回 PLY 或 GLB。
 
-从全新的香港 ECS 部署时，请直接阅读 [阿里云 FC GPU 从零部署手册](DEPLOYMENT.md)。
+从全新的香港 ECS 构建并推送镜像时，请直接阅读 [香港 ECS 构建并推送 ACR 手册](DEPLOYMENT.md)。
 
 ## 当前架构
 
@@ -42,7 +42,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 串行锁只能消除“两次推理峰值相加”，不能消除另一模型的常驻权重。如果任一模型单独推理就几乎占满 48 GB，那么“两个模型同时常驻并交替推理”无法在 48 GB Ada 实例上可靠运行。此时应改用更大显存的 FC GPU 规格；另一种方案是每次切换时卸载并重新加载模型，但那会破坏本项目的双模型预热语义，也显著增加延迟，因此没有作为默认实现。
 
-默认部署参数仍是 `fc.gpu.ada.1` / 49152 MB，便于先做真实数据验收。上线条件是组合实例初始化成功，并且分别完成一次 `/segment` 与 `/generate` 后仍有安全显存余量。若 48 GB 不足，一键脚本支持 `--gpu-type fc.gpu.hopper.1 --gpu-memory-size 98304`；前提是该规格在目标地域和账号中可用。
+上线条件是组合实例初始化成功，并且分别完成一次 `/segment` 与 `/generate` 后仍有安全显存余量。镜像同时编译 Ada `sm_89` 与 Hopper `sm_90` 的 CUDA 扩展；具体 GPU 规格由未来运行镜像的平台配置，不属于镜像构建推送脚本的职责。
 
 ## 弹性与费用
 
@@ -53,7 +53,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 - 单实例并发 `instanceConcurrency=1`：同一实例一次只接收一个业务请求。
 - 应用层再使用共享异步锁和跨进程文件锁，防止未来配置漂移或内部调用重叠。
 
-最小实例数为 0 时，弹性创建的新实例仍会自动执行 FC Initializer，依次加载两个模型；冷启动耗时和 300 秒 Initializer 上限需要实测。若设为 1，部署脚本会等待组合实例初始化完成，但该 GPU 会持续保留并产生费用。
+最小实例数为 0 时，弹性创建的新实例仍会自动执行 FC Initializer，依次加载两个模型；冷启动耗时和 300 秒 Initializer 上限需要实测。运行平台是否配置预留实例与镜像构建推送过程相互独立。
 
 ## 项目结构
 
@@ -68,7 +68,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 ├── segmenter/               # SAM3 内部服务与点选推理
 ├── shared/gpu_lock.py       # 两个进程共用的 GPU 文件锁
 ├── scripts/
-│   ├── deploy_from_hk.sh    # 离线资源、OSS、镜像和单函数部署入口
+│   ├── deploy_from_hk.sh    # 零参数构建并推送统一镜像到 ACR
 │   ├── configure_fc.py      # 幂等配置一个 FC 函数
 │   ├── fc_initializer.sh    # FC Initializer 回调
 │   └── prepare_offline_assets.py
@@ -80,22 +80,17 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 原来的 `Dockerfile.segmenter` 已删除；部署路径只构建和推送一张镜像。
 
-## 快速部署
+## 快速推送镜像
 
-一键脚本在香港 Ubuntu ECS 上完成离线资源准备、上传深圳 OSS、构建并推送组合镜像，以及幂等配置一个深圳 FC GPU 函数：
+一键脚本在香港 Ubuntu ECS 上只负责构建统一镜像并推送到 ACR。脚本没有任何可选参数，也不通过参数或环境变量接收部署配置：
 
 ```bash
-./scripts/deploy_from_hk.sh --dry-run \
-  --oss-bucket 'your-shenzhen-bucket' \
-  --acr-image 'crpi-example.cn-shenzhen.personal.cr.aliyuncs.com/namespace/repository' \
-  --acr-username 'your-acr-user'
-
 ./scripts/deploy_from_hk.sh
 ```
 
-以下账号级资源必须提前存在：深圳 OSS Bucket、深圳 ACR 仓库、FC 执行角色，以及下载受限 checkpoint 所需的 Hugging Face 权限。脚本不会越权创建这些资源，也不会自动删除旧的双函数部署。
+运行时只输入 ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码。Docker/Buildx 安装、固定构建参数、commit 与镜像摘要组成的内容寻址 tag、平台校验、登录、推送、重试和远程 Manifest 校验均自动完成。
 
-离线资源的底层入口是 `scripts/prepare_offline_assets.py`；可先用其 `--verify-only` 模式独立核验已下载资源。
+脚本不会下载 checkpoint，不会访问 OSS，不会创建或修改 FC，也不会启动 GPU。模型资源和运行平台配置属于后续独立流程。
 
 ## 手动构建
 
@@ -116,7 +111,7 @@ docker buildx build \
   -t sam3-sam3d-fc:local .
 ```
 
-FC 对自定义容器的未压缩镜像大小有 15 GB 限制。一键脚本会在推送前计算 `docker image inspect` 的层大小并硬性拒绝超限镜像。
+脚本会记录本地镜像未压缩大小。若未来部署到有镜像大小限制的运行平台，应在该平台部署前单独核对限制。
 
 推送后必须拒绝带 `unknown/unknown` attestation 的清单：
 
@@ -141,6 +136,8 @@ docker manifest inspect --verbose "$REMOTE_IMAGE" | grep -q 'unknown/unknown' &&
 ```
 
 容器设置 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1` 和 `HF_DATASETS_OFFLINE=1`。扩容时不会从公网下载模型；缺少任一必要文件会使 Initializer 失败，而不是让首个业务请求临时下载或加载。
+
+后续独立准备运行时模型资源时可使用 `scripts/prepare_offline_assets.py`；它不在镜像构建推送脚本中调用。
 
 ## HTTP 接口
 
@@ -209,7 +206,7 @@ curl -fS -X POST "$FC_URL/generate" \
 - 默认弹性配置只允许一个实例。如果将 reserved concurrency 调高，跨进程文件锁只保护单个容器，不能跨 FC 实例互斥。
 - 统一环境消除了重复的 Python/PyTorch/CUDA 用户态依赖，但两个服务进程仍各自创建 CUDA context，并且两套模型权重仍会常驻显存；显存只能在目标 GPU 上确认。
 - `CORS_ALLOW_ORIGINS=*` 适合匿名测试触发器；生产环境应限制 Origin，并选择符合业务要求的触发器认证方式。
-- 项目不自动删除旧函数或旧镜像。组合函数验证成功后，再按部署手册的迁移步骤人工清理。
+- 镜像构建推送脚本不会创建、修改或删除函数、OSS 资源及旧镜像。
 
 ## 查证资料
 

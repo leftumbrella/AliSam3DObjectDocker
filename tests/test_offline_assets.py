@@ -349,6 +349,8 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         self.assertIn("HF_HUB_OFFLINE=1", env_example)
         self.assertNotIn("hf auth login", preparer)
         self.assertIn("HF_TOKEN", preparer)
+        self.assertNotIn("use scripts/deploy_from_hk.sh", preparer)
+        self.assertIn("install the Hugging Face CLI", preparer)
 
 
 if __name__ == "__main__":

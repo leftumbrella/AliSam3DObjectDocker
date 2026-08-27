@@ -175,6 +175,10 @@ class FCConfigureTests(unittest.TestCase):
         self.assertEqual(trigger["authType"], "anonymous")
         self.assertEqual(trigger["methods"], ["GET", "POST", "OPTIONS"])
         self.assertFalse(trigger["disableURLInternet"])
+        self.assertEqual(
+            target["trigger"]["description"],
+            "Browser/API HTTP entrypoint managed by configure_fc.py",
+        )
 
         environment = target["spec"]["environmentVariables"]
         self.assertEqual(environment["CORS_ALLOW_ORIGINS"], "*")

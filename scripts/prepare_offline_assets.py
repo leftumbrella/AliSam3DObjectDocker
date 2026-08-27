@@ -412,7 +412,7 @@ def download_sam3d_checkpoint(download_root: Path) -> Path:
     if shutil.which("hf") is None:
         raise AssetError(
             "Hugging Face CLI 'hf' and HF_TOKEN are required; "
-            "use scripts/deploy_from_hk.sh or provide HF_TOKEN from a hidden prompt"
+            "install the Hugging Face CLI and provide HF_TOKEN in the environment"
         )
     download_root.mkdir(parents=True, exist_ok=True)
     run(
