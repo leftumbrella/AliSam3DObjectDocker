@@ -115,6 +115,15 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn('IMAGE_TAG="sam3-sam3d-${GIT_COMMIT_SHORT}-${digest_hex:0:12}"', self.script)
         self.assertIn("remote_digest_matches_local_with_retry", self.script)
 
+    def test_config_digest_comes_from_buildx_metadata(self) -> None:
+        self.assertIn('--metadata-file "$BUILD_METADATA_FILE"', self.script)
+        self.assertIn('."containerimage.config.digest"', self.script)
+        self.assertIn(
+            '."containerimage.descriptor".annotations["config.digest"]',
+            self.script,
+        )
+        self.assertNotIn("--format '{{.Id}}'", self.script)
+
     def test_build_pins_match_the_dockerfile(self) -> None:
         for docker_arg, script_constant in (
             ("SAM3D_REF", "SAM3D_REF"),

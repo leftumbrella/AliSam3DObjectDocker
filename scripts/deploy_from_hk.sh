@@ -26,6 +26,7 @@ IMAGE_TAG=''
 LOCAL_IMAGE=''
 REMOTE_IMAGE=''
 LOCAL_CONFIG_DIGEST=''
+BUILD_METADATA_FILE=''
 CURRENT_STEP='启动'
 ACR_LOGIN_ACTIVE=0
 TEMP_DIR=''
@@ -226,8 +227,10 @@ ensure_docker() {
 build_image() {
   CURRENT_STEP='构建 SAM3/SAM3D 统一 linux/amd64 镜像'
   cd "$PROJECT_ROOT"
+  BUILD_METADATA_FILE="$TEMP_DIR/build-metadata.json"
   docker buildx build \
     --load \
+    --metadata-file "$BUILD_METADATA_FILE" \
     --progress=plain \
     --platform linux/amd64 \
     --provenance=false \
@@ -245,9 +248,15 @@ build_image() {
   [[ "$platform" == 'linux/amd64' ]] || die "本地镜像平台错误：$platform"
   image_size="$(docker image inspect "$LOCAL_IMAGE" --format '{{.Size}}')"
   [[ "$image_size" =~ ^[0-9]+$ ]] || die '无法读取本地镜像大小'
-  LOCAL_CONFIG_DIGEST="$(docker image inspect "$LOCAL_IMAGE" --format '{{.Id}}')"
+  LOCAL_CONFIG_DIGEST="$(
+    jq -er \
+      '."containerimage.config.digest"
+       // ."containerimage.descriptor".annotations["config.digest"]
+       // empty' \
+      "$BUILD_METADATA_FILE"
+  )" || die 'Buildx 元数据未包含镜像配置摘要'
   [[ "$LOCAL_CONFIG_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
-    || die '无法读取本地镜像配置摘要'
+    || die 'Buildx 返回的镜像配置摘要格式无效'
   digest_hex=${LOCAL_CONFIG_DIGEST#sha256:}
   IMAGE_TAG="sam3-sam3d-${GIT_COMMIT_SHORT}-${digest_hex:0:12}"
   REMOTE_IMAGE="${ACR_IMAGE}:${IMAGE_TAG}"
