@@ -11,15 +11,27 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 readonly PROJECT_ROOT
+readonly OSS_REGION_ID='cn-shenzhen'
+readonly OSS_PUBLIC_ENDPOINT='https://oss-cn-shenzhen.aliyuncs.com'
+readonly OSSUTIL_VERSION='2.3.0'
+readonly OSSUTIL_SHA256='3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a'
+readonly HUGGINGFACE_HUB_VERSION='1.27.0'
+readonly TRANSFER_ROOT_DEFAULT='/root/sam3d-transfer'
 readonly SAM3D_REF='f91db411c50efee93d8db7aeb323885650f6f722'
 readonly SAM3_REF='8f0b7f4d4e7eda2ed606ebde6702c93359ad01da'
 readonly TORCH_CUDA_ARCH_LIST_VALUE='8.9;9.0'
 readonly MAX_JOBS_VALUE='2'
 readonly NVCC_THREADS_VALUE='2'
 
+TRANSFER_ROOT=$TRANSFER_ROOT_DEFAULT
+OSS_BUCKET=''
 ACR_IMAGE=''
 ACR_USERNAME=''
 ACR_HOST=''
+OSSUTIL_BIN=''
+HF_BIN=''
+TOOLS_PYTHON=''
+OSS_UPLOAD_LIST=''
 GIT_COMMIT=''
 GIT_COMMIT_SHORT=''
 IMAGE_TAG=''
@@ -27,6 +39,9 @@ LOCAL_IMAGE=''
 REMOTE_IMAGE=''
 LOCAL_CONFIG_DIGEST=''
 BUILD_METADATA_FILE=''
+ASSET_RELEASE=''
+OSS_PREFIX=''
+DEPLOYMENT_RESULT_FILE=''
 CURRENT_STEP='启动'
 ACR_LOGIN_ACTIVE=0
 TEMP_DIR=''
@@ -78,6 +93,8 @@ cleanup() {
     docker logout "$ACR_HOST" >/dev/null 2>&1
   fi
   unset ACR_IMAGE ACR_USERNAME ACR_HOST DOCKER_CONFIG
+  unset HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
+  unset OSS_REGION OSS_ENDPOINT
   safe_remove_temp_dir
   exit "$status"
 }
@@ -105,19 +122,24 @@ require_target_host() {
     22.04|24.04) ;;
     *) warn "当前 Ubuntu ${VERSION_ID:-unknown} 不是已验证的 22.04/24.04" ;;
   esac
-  [[ -t 0 ]] || die '脚本需要交互终端来读取 ACR 必要信息'
+  [[ -t 0 ]] || die '脚本需要交互终端来读取 OSS、Hugging Face 和 ACR 必要信息'
 }
 
 prompt_required_inputs() {
-  CURRENT_STEP='读取 ACR 必要信息'
+  CURRENT_STEP='读取 OSS 和 ACR 必要信息'
+  read -r -p '深圳 OSS Bucket 名: ' OSS_BUCKET
   read -r -p 'ACR 完整公网仓库地址（不含协议和 tag）: ' ACR_IMAGE
   read -r -p 'ACR 登录用户名: ' ACR_USERNAME
+  [[ -n "$OSS_BUCKET" ]] || die 'OSS Bucket 名不能为空'
   [[ -n "$ACR_IMAGE" ]] || die 'ACR 仓库地址不能为空'
   [[ -n "$ACR_USERNAME" ]] || die 'ACR 登录用户名不能为空'
 }
 
-validate_acr_inputs() {
+validate_inputs() {
+  local resolved_transfer_root
   local acr_image_pattern='^([A-Za-z0-9.-]+)/([a-z0-9._-]+)/([a-z0-9._-]+)$'
+  [[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] \
+    || die 'OSS Bucket 名必须为 3 到 63 位小写字母、数字或连字符'
   if [[ "$ACR_IMAGE" =~ $acr_image_pattern ]]; then
     ACR_HOST=${BASH_REMATCH[1]}
   else
@@ -129,6 +151,13 @@ validate_acr_inputs() {
     || die '构建机推送镜像必须使用 ACR 公网地址，不能使用 -vpc 或 -internal'
   [[ ! "$ACR_USERNAME" =~ [[:cntrl:]] ]] \
     || die 'ACR 登录用户名包含非法控制字符'
+  resolved_transfer_root="$(realpath -m -- "$TRANSFER_ROOT")"
+  [[ "$resolved_transfer_root" != '/' ]] || die '离线资源目录不能是文件系统根目录'
+  case "$resolved_transfer_root" in
+    "$PROJECT_ROOT"|"$PROJECT_ROOT"/*)
+      die '离线资源目录不能位于 Git 项目中，否则模型权重会进入 Docker 构建上下文'
+      ;;
+  esac
 }
 
 resolve_image_names() {
@@ -148,8 +177,12 @@ require_clean_checkout() {
 }
 
 check_resources() {
-  local free_kb free_gb memory_kb memory_gb
-  free_kb="$(df -Pk "$PROJECT_ROOT" | awk 'NR == 2 {print $4}')"
+  local free_kb free_gb memory_kb memory_gb storage_probe
+  storage_probe=$TRANSFER_ROOT
+  while [[ ! -e "$storage_probe" ]]; do
+    storage_probe="$(dirname -- "$storage_probe")"
+  done
+  free_kb="$(df -Pk "$storage_probe" | awk 'NR == 2 {print $4}')"
   free_gb=$((free_kb / 1024 / 1024))
   (( free_gb >= 100 )) \
     || warn "当前文件系统仅剩约 ${free_gb} GB，建议至少准备 100 GB 可用空间"
@@ -167,7 +200,11 @@ install_base_tools() {
     ca-certificates \
     curl \
     git \
-    jq
+    jq \
+    python3 \
+    python3-pip \
+    python3-venv \
+    unzip
   unset DEBIAN_FRONTEND
 }
 
@@ -268,6 +305,316 @@ ensure_temp_dir() {
   if [[ -z "$TEMP_DIR" ]]; then
     TEMP_DIR="$(mktemp -d /tmp/sam3d-acr-push.XXXXXX)"
   fi
+}
+
+ensure_tool_venv() {
+  CURRENT_STEP='安装 Hugging Face CLI'
+  local tools_root='/opt/sam3d-tools'
+  [[ ! -L "$tools_root" ]] || die "$tools_root 不得是符号链接"
+  if [[ ! -x "$tools_root/bin/python" ]]; then
+    python3 -m venv "$tools_root"
+  fi
+
+  TOOLS_PYTHON="$tools_root/bin/python"
+  "$TOOLS_PYTHON" -m pip install \
+    --disable-pip-version-check \
+    "huggingface_hub==${HUGGINGFACE_HUB_VERSION}"
+  HF_BIN="$tools_root/bin/hf"
+  [[ -x "$HF_BIN" ]] || die '安装 huggingface_hub 后仍未找到 hf 命令'
+  "$HF_BIN" version
+  export PATH="$tools_root/bin:$PATH"
+}
+
+ossutil_is_compatible() {
+  local candidate=$1
+  local version_output cp_help_output hash_help_output
+  [[ -x "$candidate" ]] || return 1
+  version_output="$("$candidate" version 2>/dev/null)" || return 1
+  [[ "$version_output" == *"$OSSUTIL_VERSION"* ]] || return 1
+  cp_help_output="$("$candidate" cp --help 2>/dev/null)" || return 1
+  hash_help_output="$("$candidate" hash --help 2>/dev/null)" || return 1
+  grep -q -- '--checkpoint-dir' <<<"$cp_help_output" \
+    && grep -q -- '--files-from-raw' <<<"$cp_help_output" \
+    && grep -q -- '--output-dir' <<<"$cp_help_output" \
+    && grep -q -- 'hash md5|crc64' <<<"$hash_help_output"
+}
+
+ensure_ossutil() {
+  CURRENT_STEP='安装并校验 ossutil'
+  local candidate archive
+
+  candidate="$(command -v ossutil 2>/dev/null || true)"
+  if [[ -n "$candidate" ]] && ossutil_is_compatible "$candidate"; then
+    OSSUTIL_BIN=$candidate
+    log "复用现有 ossutil：$OSSUTIL_BIN"
+    return
+  fi
+
+  candidate='/opt/sam3d-tools/bin/ossutil'
+  if ossutil_is_compatible "$candidate"; then
+    OSSUTIL_BIN=$candidate
+    log "复用已校验的 ossutil：$OSSUTIL_BIN"
+    return
+  fi
+
+  ensure_temp_dir
+  archive="ossutil-${OSSUTIL_VERSION}-linux-amd64.zip"
+  curl --fail --location --retry 5 --retry-all-errors \
+    --output "$TEMP_DIR/$archive" \
+    "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VERSION}/${archive}"
+  printf '%s  %s\n' "$OSSUTIL_SHA256" "$TEMP_DIR/$archive" | sha256sum -c -
+  unzip -q "$TEMP_DIR/$archive" -d "$TEMP_DIR"
+  install -m 0755 \
+    "$TEMP_DIR/ossutil-${OSSUTIL_VERSION}-linux-amd64/ossutil" \
+    "$candidate"
+  if ! ossutil_is_compatible "$candidate"; then
+    warn 'ossutil 契约检查失败，诊断输出如下（version / cp --help）'
+    "$candidate" version || true
+    "$candidate" cp --help || true
+    die "ossutil 安装后命令契约检查失败：需要 ${OSSUTIL_VERSION} 的断点、文件清单、输出目录和 CRC64 能力"
+  fi
+  OSSUTIL_BIN=$candidate
+  "$OSSUTIL_BIN" version
+}
+
+ensure_huggingface_access() {
+  CURRENT_STEP='验证 Hugging Face 模型权限'
+  local token=''
+  unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE
+  if [[ -z "${HF_TOKEN:-}" ]]; then
+    read -r -s -p 'Hugging Face Access Token（输入时不会显示）: ' token
+    printf '\n'
+    [[ -n "$token" ]] || die 'Hugging Face Access Token 不能为空'
+    export HF_TOKEN=$token
+    token=''
+  fi
+  if [[ "$HF_TOKEN" =~ [[:space:]] ]]; then
+    unset HF_TOKEN
+    die 'Hugging Face Access Token 不能包含空白字符'
+  fi
+
+  if ! "$HF_BIN" auth whoami >/dev/null 2>&1; then
+    unset HF_TOKEN
+    die 'Hugging Face Access Token 无效，或香港 ECS 无法连接 Hugging Face'
+  fi
+  if ! "$TOOLS_PYTHON" - <<'PY' >/dev/null 2>&1
+import os
+
+from huggingface_hub import HfApi
+
+api = HfApi()
+for repository in ("facebook/sam-3d-objects", "facebook/sam3"):
+    api.model_info(repository, token=os.environ["HF_TOKEN"])
+PY
+  then
+    unset HF_TOKEN
+    die '无法访问 facebook/sam-3d-objects 或 facebook/sam3；请确认两个模型均已获批且网络正常'
+  fi
+  log 'Hugging Face Access Token 验证成功；Token 仅保存在当前脚本进程环境中'
+}
+
+prepare_offline_assets() {
+  CURRENT_STEP='准备并校验完整离线模型资源'
+  local prepare_script="$PROJECT_ROOT/scripts/prepare_offline_assets.py"
+  local -a args
+
+  mkdir -p -- "$TRANSFER_ROOT"
+  [[ ! -L "$TRANSFER_ROOT" ]] || die '离线资源目录不得是符号链接'
+  chmod 700 "$TRANSFER_ROOT"
+  export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-60}"
+
+  if "$TOOLS_PYTHON" "$prepare_script" \
+    --verify-only \
+    --transfer-root "$TRANSFER_ROOT" >/dev/null 2>&1; then
+    log '现有离线资源完整，跳过下载'
+  else
+    args=(--transfer-root "$TRANSFER_ROOT")
+    local needs_huggingface=0
+    if "$TOOLS_PYTHON" "$prepare_script" \
+      --verify-main-only \
+      --transfer-root "$TRANSFER_ROOT" >/dev/null 2>&1; then
+      log '现有 SAM3D 主 checkpoint 完整，补齐其他离线资源'
+    else
+      args+=(--download-sam3d)
+      needs_huggingface=1
+    fi
+    if "$TOOLS_PYTHON" "$prepare_script" \
+      --verify-sam3-only \
+      --transfer-root "$TRANSFER_ROOT" >/dev/null 2>&1; then
+      log '现有 SAM3 checkpoint 完整，复用现有文件'
+    else
+      args+=(--download-sam3)
+      needs_huggingface=1
+    fi
+    if [[ "$needs_huggingface" -eq 1 ]]; then
+      ensure_huggingface_access
+    fi
+    "$TOOLS_PYTHON" "$prepare_script" "${args[@]}"
+  fi
+
+  "$TOOLS_PYTHON" "$prepare_script" \
+    --verify-only \
+    --transfer-root "$TRANSFER_ROOT"
+  unset HF_TOKEN
+
+  local manifest="$TRANSFER_ROOT/storage/offline-assets.sha256"
+  local digest
+  digest="$(sha256sum "$manifest" | awk '{print substr($1, 1, 12)}')"
+  [[ "$digest" =~ ^[0-9a-f]{12}$ ]] || die '无法计算离线资源清单哈希'
+  ASSET_RELEASE="bundle-${digest}"
+  OSS_PREFIX="sam3d/releases/${ASSET_RELEASE}"
+  DEPLOYMENT_RESULT_FILE="$TRANSFER_ROOT/deployment-result.env"
+}
+
+prompt_oss_credentials() {
+  local access_key_id='' access_key_secret='' session_token=''
+  read -r -p 'OSS AccessKey ID: ' access_key_id
+  read -r -s -p 'OSS AccessKey Secret: ' access_key_secret
+  printf '\n'
+  read -r -s -p 'OSS STS Token（普通 RAM AccessKey 直接回车）: ' session_token
+  printf '\n'
+  [[ -n "$access_key_id" && -n "$access_key_secret" ]] \
+    || die 'OSS AccessKey ID 和 Secret 不能为空'
+  export OSS_ACCESS_KEY_ID=$access_key_id
+  export OSS_ACCESS_KEY_SECRET=$access_key_secret
+  if [[ -n "$session_token" ]]; then
+    export OSS_SESSION_TOKEN=$session_token
+  else
+    unset OSS_SESSION_TOKEN
+  fi
+  access_key_id=''
+  access_key_secret=''
+  session_token=''
+}
+
+ensure_oss_access() {
+  CURRENT_STEP='验证深圳 OSS 凭证和 Bucket'
+  export OSS_REGION="$OSS_REGION_ID"
+  export OSS_ENDPOINT="$OSS_PUBLIC_ENDPOINT"
+
+  if [[ -n "${OSS_ACCESS_KEY_ID:-}" && -z "${OSS_ACCESS_KEY_SECRET:-}" ]] \
+    || [[ -z "${OSS_ACCESS_KEY_ID:-}" && -n "${OSS_ACCESS_KEY_SECRET:-}" ]]; then
+    die 'OSS_ACCESS_KEY_ID 和 OSS_ACCESS_KEY_SECRET 必须同时设置'
+  fi
+
+  if "$OSSUTIL_BIN" ls "oss://${OSS_BUCKET}/" >/dev/null 2>&1; then
+    log '深圳 OSS Bucket 和现有凭证验证成功'
+    return
+  fi
+
+  warn '现有 ossutil 配置、环境凭证或 ECS RAM Role 无法访问目标 Bucket，将读取临时 RAM/STS 凭证'
+  unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
+  prompt_oss_credentials
+  "$OSSUTIL_BIN" ls "oss://${OSS_BUCKET}/" >/dev/null \
+    || die 'OSS 访问失败，请核对 Bucket 名、深圳地域和 RAM 权限'
+}
+
+write_oss_upload_list() {
+  local manifest="$TRANSFER_ROOT/storage/offline-assets.sha256"
+  local line key temporary_list
+  OSS_UPLOAD_LIST="$TRANSFER_ROOT/oss-upload-files-${ASSET_RELEASE}.txt"
+  [[ ! -L "$OSS_UPLOAD_LIST" && ! -d "$OSS_UPLOAD_LIST" ]] \
+    || die "OSS 上传清单路径不能是符号链接或目录：$OSS_UPLOAD_LIST"
+  temporary_list="$(mktemp "$TRANSFER_ROOT/.oss-upload-files.XXXXXX")"
+  printf '%s\n' 'offline-assets.sha256' >"$temporary_list"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ ! "$line" =~ ^[0-9a-f]{64}[[:space:]][[:space:]](.+)$ ]]; then
+      die "离线资源清单行格式无效：$line"
+    fi
+    key=${BASH_REMATCH[1]}
+    case "$key" in
+      /*|../*|*/../*|*/..) die "离线资源清单包含不安全路径：$key" ;;
+    esac
+    [[ -f "$TRANSFER_ROOT/storage/$key" && ! -L "$TRANSFER_ROOT/storage/$key" ]] \
+      || die "离线资源清单对象不是普通文件：$key"
+    printf '%s\n' "$key" >>"$temporary_list"
+  done <"$manifest"
+  chmod 600 "$temporary_list"
+  mv -f -- "$temporary_list" "$OSS_UPLOAD_LIST"
+}
+
+oss_crc64() {
+  local source=$1
+  local output line
+  output="$("$OSSUTIL_BIN" hash crc64 "$source")" || return 1
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^([0-9]+)[[:space:]]+(.+)$ ]] \
+      && [[ "${BASH_REMATCH[2]}" == "$source" ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return
+    fi
+  done <<<"$output"
+  return 1
+}
+
+verify_or_repair_remote_oss_object() {
+  local key=$1
+  local checkpoint_dir=$2
+  local output_dir=$3
+  local source="$TRANSFER_ROOT/storage/$key"
+  local url="oss://${OSS_BUCKET}/${OSS_PREFIX}/${key}"
+  local local_crc64 remote_crc64=''
+
+  local_crc64="$(oss_crc64 "$source")" \
+    || die "无法计算本地资源 CRC64：$source"
+  if remote_crc64="$(oss_crc64 "$url")" \
+    && [[ "$remote_crc64" == "$local_crc64" ]]; then
+    return
+  fi
+
+  warn "OSS 对象缺失或 CRC64 不一致，将强制修复：$url"
+  "$OSSUTIL_BIN" cp -f \
+    "$source" \
+    "$url" \
+    --checkpoint-dir "$checkpoint_dir" \
+    --output-dir "$output_dir"
+  remote_crc64="$(oss_crc64 "$url")" \
+    || die "修复后仍无法读取 OSS 对象 CRC64：$url"
+  [[ "$remote_crc64" == "$local_crc64" ]] \
+    || die "修复后 OSS 对象 CRC64 仍与本地不一致：$url"
+}
+
+verify_remote_oss_inventory() {
+  local checkpoint_dir=$1
+  local output_dir=$2
+  local manifest="$TRANSFER_ROOT/storage/offline-assets.sha256"
+  local line key count=0
+  verify_or_repair_remote_oss_object \
+    'offline-assets.sha256' "$checkpoint_dir" "$output_dir"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ ! "$line" =~ ^[0-9a-f]{64}[[:space:]][[:space:]](.+)$ ]]; then
+      die "离线资源清单行格式无效：$line"
+    fi
+    key=${BASH_REMATCH[1]}
+    case "$key" in
+      /*|../*|*/../*|*/..) die "离线资源清单包含不安全路径：$key" ;;
+    esac
+    verify_or_repair_remote_oss_object "$key" "$checkpoint_dir" "$output_dir"
+    ((count += 1))
+  done <"$manifest"
+  (( count > 0 )) || die '离线资源清单为空'
+  log "OSS 已逐项核对 ${count} 个模型资源对象和校验清单的 CRC64：oss://${OSS_BUCKET}/${OSS_PREFIX}/"
+}
+
+upload_offline_assets() {
+  CURRENT_STEP='断点上传完整离线资源到深圳 OSS'
+  local checkpoint_dir="$TRANSFER_ROOT/oss-upload-checkpoints"
+  local output_dir="$TRANSFER_ROOT/ossutil-output"
+  mkdir -p -- "$checkpoint_dir"
+  mkdir -p -- "$output_dir"
+  chmod 700 "$checkpoint_dir"
+  chmod 700 "$output_dir"
+  write_oss_upload_list
+
+  "$OSSUTIL_BIN" cp -u -r \
+    "$TRANSFER_ROOT/storage/" \
+    "oss://${OSS_BUCKET}/${OSS_PREFIX}/" \
+    --files-from-raw "$OSS_UPLOAD_LIST" \
+    --checkpoint-dir "$checkpoint_dir" \
+    --output-dir "$output_dir"
+
+  verify_remote_oss_inventory "$checkpoint_dir" "$output_dir"
+  unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN OSS_REGION OSS_ENDPOINT
 }
 
 login_acr() {
@@ -420,27 +767,51 @@ verify_remote_manifest() {
   log 'ACR 远程 Manifest 校验通过'
 }
 
+write_deployment_result() {
+  CURRENT_STEP='写入非敏感部署结果'
+  local temporary_result
+  [[ ! -L "$DEPLOYMENT_RESULT_FILE" && ! -d "$DEPLOYMENT_RESULT_FILE" ]] \
+    || die "结果路径不能是符号链接或目录：$DEPLOYMENT_RESULT_FILE"
+  temporary_result="$(mktemp "$TRANSFER_ROOT/.deployment-result.XXXXXX")"
+  {
+    printf 'GIT_COMMIT=%q\n' "$GIT_COMMIT"
+    printf 'REMOTE_IMAGE=%q\n' "$REMOTE_IMAGE"
+    printf 'OSS_BUCKET=%q\n' "$OSS_BUCKET"
+    printf 'OSS_PREFIX=%q\n' "$OSS_PREFIX"
+    printf 'FC_OSS_BUCKET_PATH=%q\n' "/$OSS_PREFIX"
+    printf 'FC_OSS_MOUNT_DIR=%q\n' '/mnt/nas/sam3d'
+  } >"$temporary_result"
+  chmod 600 "$temporary_result"
+  mv -f -- "$temporary_result" "$DEPLOYMENT_RESULT_FILE"
+}
+
 print_plan() {
   cat <<EOF
 
 即将自动执行
-  Git commit： $GIT_COMMIT
-  本地镜像：   $LOCAL_IMAGE
-  目标仓库：   $ACR_IMAGE
+  Git commit：    $GIT_COMMIT
+  离线资源目录： $TRANSFER_ROOT
+  深圳 OSS：     oss://$OSS_BUCKET/sam3d/releases/bundle-<资源清单摘要>/
+  本地镜像：     $LOCAL_IMAGE
+  目标仓库：     $ACR_IMAGE
 
-脚本只会安装必要构建工具、构建一张 linux/amd64 统一镜像并推送到 ACR。
-最终标签由 Git commit 和构建后的镜像摘要自动生成。
-不会下载模型权重，不会访问 OSS，不会创建或修改 FC，也不会启动 GPU。
+脚本会下载或复用并校验 SAM3、SAM3D、MoGe 和 DINOv2 离线资源，
+把完整资源包断点上传到新的内容寻址 OSS 前缀，再构建并推送 linux/amd64 统一镜像。
+不会创建或修改 FC，也不会启动 GPU。
 EOF
 }
 
 print_completion() {
   cat <<EOF
 
-镜像构建和推送完成
+香港 ECS 资源上传和镜像推送完成
 
-  ACR 镜像：$REMOTE_IMAGE
-  Git commit：$GIT_COMMIT
+  ACR 镜像：        $REMOTE_IMAGE
+  OSS Bucket：      $OSS_BUCKET
+  OSS Bucket 子目录：/$OSS_PREFIX
+  FC 本地挂载目录： /mnt/nas/sam3d
+  Git commit：       $GIT_COMMIT
+  结果文件：         $DEPLOYMENT_RESULT_FILE
 EOF
 }
 
@@ -448,21 +819,29 @@ main() {
   require_no_arguments "$@"
   require_target_host
   prompt_required_inputs
-  validate_acr_inputs
+  validate_inputs
   resolve_image_names
   require_clean_checkout
   print_plan
   check_resources
   install_base_tools
   ensure_docker
-  login_acr
+  ensure_tool_venv
+  ensure_ossutil
+  prepare_offline_assets
+  ensure_oss_access
+  upload_offline_assets
   build_image
+  login_acr
   push_image
   verify_remote_manifest
+  write_deployment_result
 
   docker logout "$ACR_HOST" >/dev/null
   ACR_LOGIN_ACTIVE=0
   print_completion
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

@@ -2,7 +2,7 @@
 
 本项目把 SAM 3 点选分割和 SAM 3D Objects 重建放进同一个阿里云函数计算（FC）GPU 函数。浏览器只配置一个 HTTP 地址：鼠标点选调用 `POST /segment` 得到 Mask，再把原图和 Mask 交给同一地址的 `POST /generate`，返回 PLY 或 GLB。
 
-从全新的香港 ECS 构建并推送镜像时，请直接阅读 [香港 ECS 构建并推送 ACR 手册](DEPLOYMENT.md)。
+从全新的香港 ECS 上传离线资源并推送镜像时，请直接阅读 [香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)。
 
 ## 当前架构
 
@@ -68,7 +68,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 ├── segmenter/               # SAM3 内部服务与点选推理
 ├── shared/gpu_lock.py       # 两个进程共用的 GPU 文件锁
 ├── scripts/
-│   ├── deploy_from_hk.sh    # 零参数构建并推送统一镜像到 ACR
+│   ├── deploy_from_hk.sh    # 零参数准备资源、上传 OSS 并推送 ACR
 │   ├── configure_fc.py      # 幂等配置一个 FC 函数
 │   ├── fc_initializer.sh    # FC Initializer 回调
 │   └── prepare_offline_assets.py
@@ -78,19 +78,19 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 └── DEPLOYMENT.md
 ```
 
-原来的 `Dockerfile.segmenter` 已删除；部署路径只构建和推送一张镜像。
+原来的 `Dockerfile.segmenter` 已删除；部署路径只构建和推送一张镜像，同时上传一份供它挂载的完整离线资源包。
 
-## 快速推送镜像
+## 一键上传资源并推送镜像
 
-一键脚本在香港 Ubuntu ECS 上只负责构建统一镜像并推送到 ACR。脚本没有任何可选参数，也不通过参数或环境变量接收部署配置：
+一键脚本在香港 Ubuntu ECS 上准备并校验完整模型资源、断点上传深圳 OSS，然后构建统一镜像并推送到 ACR。脚本没有任何可选参数：
 
 ```bash
 ./scripts/deploy_from_hk.sh
 ```
 
-运行时只输入 ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码。Docker/Buildx 安装、固定构建参数、commit 与镜像摘要组成的内容寻址 tag、平台校验、登录、推送、重试和远程 Manifest 校验均自动完成。
+运行时输入深圳 OSS Bucket、ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码。本地资源不完整时还会隐藏读取 Hugging Face Token；现有 OSS 身份不可用时才读取临时 RAM/STS 凭证。SAM3、SAM3D、MoGe、DINOv2 下载与校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、镜像构建、推送重试和 Manifest 校验均自动完成。
 
-脚本不会下载 checkpoint，不会访问 OSS，不会创建或修改 FC，也不会启动 GPU。模型资源和运行平台配置属于后续独立流程。
+脚本不会创建或修改 FC，也不会启动 GPU。完成输出会给出 ACR 镜像、OSS Bucket 子目录以及固定的容器挂载目录 `/mnt/nas/sam3d`。
 
 ## 手动构建
 
@@ -137,7 +137,7 @@ docker manifest inspect --verbose "$REMOTE_IMAGE" | grep -q 'unknown/unknown' &&
 
 容器设置 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1` 和 `HF_DATASETS_OFFLINE=1`。扩容时不会从公网下载模型；缺少任一必要文件会使 Initializer 失败，而不是让首个业务请求临时下载或加载。
 
-后续独立准备运行时模型资源时可使用 `scripts/prepare_offline_assets.py`；它不在镜像构建推送脚本中调用。
+`scripts/deploy_from_hk.sh` 会自动调用 `scripts/prepare_offline_assets.py`，并在上传前后执行完整资源门禁。也可以单独调用后者只准备或校验本地资源包。
 
 ## HTTP 接口
 
@@ -206,7 +206,7 @@ curl -fS -X POST "$FC_URL/generate" \
 - 默认弹性配置只允许一个实例。如果将 reserved concurrency 调高，跨进程文件锁只保护单个容器，不能跨 FC 实例互斥。
 - 统一环境消除了重复的 Python/PyTorch/CUDA 用户态依赖，但两个服务进程仍各自创建 CUDA context，并且两套模型权重仍会常驻显存；显存只能在目标 GPU 上确认。
 - `CORS_ALLOW_ORIGINS=*` 适合匿名测试触发器；生产环境应限制 Origin，并选择符合业务要求的触发器认证方式。
-- 镜像构建推送脚本不会创建、修改或删除函数、OSS 资源及旧镜像。
+- 一键脚本不会创建或修改函数计算，也不会创建或删除 OSS Bucket、旧资源前缀及旧镜像；它只向当前内容寻址前缀写入并校验清单内对象。
 
 ## 查证资料
 

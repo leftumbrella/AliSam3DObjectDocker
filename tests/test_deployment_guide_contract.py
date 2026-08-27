@@ -1,4 +1,4 @@
-"""Regression checks for the focused ACR publishing guide."""
+"""Regression checks for the focused OSS and ACR publishing guide."""
 
 from __future__ import annotations
 
@@ -18,13 +18,16 @@ class DeploymentGuideContractTests(unittest.TestCase):
         cls.guide = GUIDE.read_text(encoding="utf-8")
 
     def test_readme_links_the_focused_guide(self) -> None:
-        self.assertIn("[香港 ECS 构建并推送 ACR 手册](DEPLOYMENT.md)", self.readme)
+        self.assertIn("[香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)", self.readme)
 
-    def test_guide_requires_only_the_acr_inputs(self) -> None:
+    def test_guide_documents_required_and_conditional_inputs(self) -> None:
         for required in (
+            "深圳 OSS Bucket 名",
             "ACR 完整公网仓库地址",
             "ACR 登录用户名",
             "ACR Registry 密码",
+            "Hugging Face Access Token",
+            "OSS AccessKey Secret",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.guide)
@@ -32,12 +35,14 @@ class DeploymentGuideContractTests(unittest.TestCase):
         self.assertIn("脚本没有任何可选参数", self.guide)
         self.assertNotIn("./scripts/deploy_from_hk.sh --", self.guide)
 
-    def test_guide_scopes_the_script_to_build_and_push(self) -> None:
+    def test_guide_scopes_the_script_to_assets_oss_and_acr(self) -> None:
+        self.assertIn("准备并校验完整离线模型资源", self.guide)
+        self.assertIn("上传深圳 OSS", self.guide)
+        self.assertIn("sam3/sam3.pt", self.guide)
+        self.assertIn("offline-assets.sha256", self.guide)
         self.assertIn("构建一张 `linux/amd64` 统一镜像", self.guide)
         self.assertIn("登录 ACR", self.guide)
         self.assertIn("推送镜像", self.guide)
-        self.assertIn("不会下载模型权重", self.guide)
-        self.assertIn("不会访问 OSS", self.guide)
         self.assertIn("不会创建或修改函数计算", self.guide)
         self.assertIn("不会启动 GPU", self.guide)
 
@@ -49,6 +54,10 @@ class DeploymentGuideContractTests(unittest.TestCase):
             "unknown/unknown",
             "自动生成不可变 tag",
             "Docker 构建缓存",
+            "精确上传清单",
+            "CRC64",
+            "/root/sam3d-transfer/ossutil-output",
+            "构建完成后才登录 ACR",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.guide)
