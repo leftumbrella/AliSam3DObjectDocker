@@ -125,6 +125,15 @@ class HongKongDeployScriptTests(unittest.TestCase):
         positions = [main_block.index(step) for step in ordered_steps]
         self.assertEqual(positions, sorted(positions))
 
+    def test_huggingface_access_is_only_required_for_sam3d(self) -> None:
+        access_block = self.script.split("ensure_huggingface_access() {", 1)[1].split(
+            "\n}\n\nprepare_offline_assets() {",
+            1,
+        )[0]
+        self.assertIn("facebook/sam-3d-objects", access_block)
+        self.assertNotIn("facebook/sam3", access_block)
+        self.assertEqual(self.script.count("needs_huggingface=1"), 1)
+
     def test_upload_verifies_every_checksum_manifest_object(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

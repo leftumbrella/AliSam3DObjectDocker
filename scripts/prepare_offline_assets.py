@@ -20,12 +20,16 @@ import tempfile
 SAM3D_REPOSITORY = "facebook/sam-3d-objects"
 SAM3D_REVISION = "2e73555018d2741ccd486e56c24fac41155a1dc6"
 SAM3_REPOSITORY = "facebook/sam3"
-# Traceable to the Hugging Face model API with expanded LFS metadata:
-# https://huggingface.co/api/models/facebook/sam3/revision/3c879f39826c281e95690f02c7821c4de09afae7?blobs=true
+# Pinned to the public ModelScope mirror:
+# https://modelscope.cn/models/facebook/sam3/resolve/96f3e1b404ba14f2cfac60ee6ae87c269a7b7923/sam3.pt
 # The SAM 3 Git source commit used by Dockerfile's unified builder belongs to a
 # separate repository/history and is therefore pinned independently.
-SAM3_REVISION = "3c879f39826c281e95690f02c7821c4de09afae7"
+SAM3_MODELSCOPE_REVISION = "96f3e1b404ba14f2cfac60ee6ae87c269a7b7923"
 SAM3_FILENAME = "sam3.pt"
+SAM3_MODELSCOPE_URL = (
+    f"https://modelscope.cn/models/{SAM3_REPOSITORY}/resolve/"
+    f"{SAM3_MODELSCOPE_REVISION}/{SAM3_FILENAME}"
+)
 SAM3_WEIGHT_SIZE = 3_450_062_241
 SAM3_WEIGHT_SHA256 = (
     "9999e2341ceef5e136daa386eecb55cb414446a00ac2b55eb2dfd2f7c3cf8c9e"
@@ -467,34 +471,14 @@ def copy_sam3_checkpoint(source: Path, destination: Path) -> None:
 
 
 def download_sam3_checkpoint(download_root: Path) -> Path:
-    if shutil.which("hf") is None:
-        raise AssetError(
-            "Hugging Face CLI 'hf' and HF_TOKEN are required to download SAM 3"
-        )
-    download_root.mkdir(parents=True, exist_ok=True)
     destination = download_root / SAM3_FILENAME
-    if destination.is_symlink():
-        raise AssetError(f"refusing to download SAM 3 checkpoint through symlink: {destination}")
-    if destination.exists():
-        verify_sam3_checkpoint(destination)
-        print(f"[reuse] SAM 3 checkpoint: {destination}")
-        return destination
-    run(
-        [
-            "hf",
-            "download",
-            "--repo-type",
-            "model",
-            "--revision",
-            SAM3_REVISION,
-            "--local-dir",
-            str(download_root),
-            SAM3_REPOSITORY,
-            SAM3_FILENAME,
-        ],
-        label=f"download gated checkpoint {SAM3_REPOSITORY}",
+    download_known_file(
+        destination,
+        url=SAM3_MODELSCOPE_URL,
+        expected_size=SAM3_WEIGHT_SIZE,
+        expected_sha256=SAM3_WEIGHT_SHA256,
+        label="SAM 3 checkpoint from ModelScope",
     )
-    verify_sam3_checkpoint(destination)
     return destination
 
 
@@ -731,7 +715,8 @@ def prepare(args: argparse.Namespace) -> None:
         copy_sam3_checkpoint(sam3_source, sam3_destination)
     elif not sam3_destination.is_file():
         raise AssetError(
-            "SAM 3 checkpoint is unavailable; use --download-sam3 with HF_TOKEN, "
+            "SAM 3 checkpoint is unavailable; use --download-sam3 to download "
+            "it from ModelScope, "
             "or pass --sam3-source /path/to/sam3.pt"
         )
     verify_sam3_checkpoint(sam3_destination)
@@ -801,7 +786,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--download-sam3",
         action="store_true",
-        help="download the gated SAM 3 checkpoint with the logged-in hf CLI",
+        help="download the pinned SAM 3 checkpoint from ModelScope",
     )
     parser.add_argument(
         "--verify-only",

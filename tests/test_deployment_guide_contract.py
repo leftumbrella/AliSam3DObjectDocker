@@ -45,6 +45,8 @@ class DeploymentGuideContractTests(unittest.TestCase):
         self.assertIn("推送镜像", self.guide)
         self.assertIn("不会创建或修改函数计算", self.guide)
         self.assertIn("不会启动 GPU", self.guide)
+        self.assertIn("https://modelscope.cn/models/facebook/sam3", self.guide)
+        self.assertIn("SAM3 从 ModelScope", self.guide)
 
     def test_guide_documents_automatic_safety_gates(self) -> None:
         for required in (

@@ -122,7 +122,7 @@ require_target_host() {
     22.04|24.04) ;;
     *) warn "当前 Ubuntu ${VERSION_ID:-unknown} 不是已验证的 22.04/24.04" ;;
   esac
-  [[ -t 0 ]] || die '脚本需要交互终端来读取 OSS、Hugging Face 和 ACR 必要信息'
+  [[ -t 0 ]] || die '脚本需要交互终端来读取 OSS、必要时的 Hugging Face 和 ACR 信息'
 }
 
 prompt_required_inputs() {
@@ -403,12 +403,11 @@ import os
 from huggingface_hub import HfApi
 
 api = HfApi()
-for repository in ("facebook/sam-3d-objects", "facebook/sam3"):
-    api.model_info(repository, token=os.environ["HF_TOKEN"])
+api.model_info("facebook/sam-3d-objects", token=os.environ["HF_TOKEN"])
 PY
   then
     unset HF_TOKEN
-    die '无法访问 facebook/sam-3d-objects 或 facebook/sam3；请确认两个模型均已获批且网络正常'
+    die '无法访问 facebook/sam-3d-objects；请确认该模型已获批且网络正常'
   fi
   log 'Hugging Face Access Token 验证成功；Token 仅保存在当前脚本进程环境中'
 }
@@ -444,7 +443,7 @@ prepare_offline_assets() {
       log '现有 SAM3 checkpoint 完整，复用现有文件'
     else
       args+=(--download-sam3)
-      needs_huggingface=1
+      log 'SAM3 checkpoint 缺失，将从 ModelScope 下载公开权重'
     fi
     if [[ "$needs_huggingface" -eq 1 ]]; then
       ensure_huggingface_access

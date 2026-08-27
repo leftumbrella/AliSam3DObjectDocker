@@ -254,6 +254,31 @@ class OfflineAssetPreparationTests(unittest.TestCase):
                 offline_assets.verify_sam3_checkpoint(destination)
             self.assertEqual(destination.read_bytes(), payload)
 
+    def test_sam3_download_uses_pinned_modelscope_url(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            download_root = Path(directory)
+            destination = download_root / offline_assets.SAM3_FILENAME
+            with mock.patch.object(offline_assets, "download_known_file") as download:
+                result = offline_assets.download_sam3_checkpoint(download_root)
+
+            self.assertEqual(result, destination)
+            download.assert_called_once_with(
+                destination,
+                url=offline_assets.SAM3_MODELSCOPE_URL,
+                expected_size=offline_assets.SAM3_WEIGHT_SIZE,
+                expected_sha256=offline_assets.SAM3_WEIGHT_SHA256,
+                label="SAM 3 checkpoint from ModelScope",
+            )
+            self.assertIn(
+                offline_assets.SAM3_MODELSCOPE_REVISION,
+                offline_assets.SAM3_MODELSCOPE_URL,
+            )
+            self.assertIn(
+                "modelscope.cn/models/facebook/sam3/resolve/",
+                offline_assets.SAM3_MODELSCOPE_URL,
+            )
+            self.assertNotIn("huggingface.co", offline_assets.SAM3_MODELSCOPE_URL)
+
     def test_sam3_checkpoint_rejects_truncation_and_destination_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -303,6 +328,7 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         self.assertIn("--verify-sam3-only", help_result.stdout)
         self.assertIn("--download-sam3", help_result.stdout)
         self.assertIn("--sam3-source", help_result.stdout)
+        self.assertIn("ModelScope", help_result.stdout)
 
         with tempfile.TemporaryDirectory() as directory:
             verify_result = subprocess.run(

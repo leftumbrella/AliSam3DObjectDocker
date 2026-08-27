@@ -86,14 +86,17 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
         self.assertNotIn("spconv-cu121", self.fc_requirements)
 
     def test_checkpoint_pin_is_traceable_and_separate_from_source_pin(self) -> None:
-        self.assertIn("huggingface.co/api/models/facebook/sam3/revision/", self.assets)
+        self.assertIn("modelscope.cn/models/facebook/sam3/resolve/", self.assets)
         self.assertIn("SAM3_WEIGHT_SIZE = 3_450_062_241", self.assets)
         self.assertIn(
             "9999e2341ceef5e136daa386eecb55cb414446a00ac2b55eb2dfd2f7c3cf8c9e",
             self.assets,
         )
         source_ref = re.search(r"ARG SAM3_REF=([0-9a-f]{40})", self.dockerfile)
-        weight_ref = re.search(r'SAM3_REVISION = "([0-9a-f]{40})"', self.assets)
+        weight_ref = re.search(
+            r'SAM3_MODELSCOPE_REVISION = "([0-9a-f]{40})"',
+            self.assets,
+        )
         self.assertIsNotNone(source_ref)
         self.assertIsNotNone(weight_ref)
         self.assertNotEqual(source_ref.group(1), weight_ref.group(1))
