@@ -86,6 +86,17 @@ class DeploymentGuideContractTests(unittest.TestCase):
                 self.assertIn(required, self.guide)
         self.assertNotIn("sudo -i", self.guide)
 
+    def test_guide_documents_local_wsl2_push_requirements(self) -> None:
+        for required in (
+            "本地电脑的 WSL2 Ubuntu",
+            "ACR 公网地址",
+            "公网访问控制",
+            "上行带宽",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, self.guide)
+        self.assertIn("本地电脑的 WSL2 Ubuntu", self.readme)
+
 
 if __name__ == "__main__":
     unittest.main()

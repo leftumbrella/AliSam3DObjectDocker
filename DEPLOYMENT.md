@@ -6,13 +6,16 @@
 
 ## 开始前准备
 
-### 香港 ECS
+### 构建机（香港 ECS 或本地 WSL2）
+
+脚本既可在香港 ECS 上运行，也可在本地电脑的 WSL2 Ubuntu 中运行；它不要求构建机本身属于阿里云。Windows PowerShell 和原生 Git Bash 不在支持范围内。
 
 构建机需要满足：
 
 - Ubuntu 22.04 或 24.04。
 - x86_64/amd64 架构。
 - 建议至少 100 GB 可用磁盘和 32 GB 内存。
+- 本地电脑需要可用的 Docker Engine，或已启用 WSL2 集成的 Docker Desktop；大镜像推送耗时取决于本地上行带宽。
 - 能访问 `v4.gh-proxy.org`、`hf-mirror.com`、ModelScope（魔塔社区）、阿里云 PyPI/PyTorch 镜像、`docker.1ms.run`、Docker CE 软件源、深圳 OSS 公网地址和目标 ACR 公网地址。
 - 使用普通用户直接运行脚本；系统工具缺失、Docker 服务未启动或当前用户不能访问 Docker socket 时，需要该用户具备 `sudo` 权限。脚本不会修改用户组。
 
@@ -24,7 +27,7 @@
 2. SAM3 从魔搭社区的公开模型 [facebook/sam3](https://modelscope.cn/models/facebook/sam3) 下载。两套主权重都不需要 Hugging Face Token。
 3. MoGe 与 DINOv2 权重通过 HF-Mirror 的公开直链下载，不需要登录或 Token。
 4. 提前创建深圳地域 OSS Bucket，并准备对目标 Bucket 有读取、列举和上传权限的 ECS RAM Role、ossutil 配置或临时 RAM/STS 凭证。
-5. 香港 ECS 跨地域上传固定使用公网 Endpoint：
+5. 香港 ECS 或本地电脑跨地域上传固定使用公网 Endpoint：
 
    ```text
    https://oss-cn-shenzhen.aliyuncs.com
@@ -46,6 +49,8 @@
 3. ACR Registry 密码。
 
 仓库地址不要包含 `https://`，不要附加 tag，不要使用 `-vpc` 或 `-internal` 地址。
+
+本地电脑推送必须使用 ACR 公网地址。ACR 企业版还必须启用公网访问控制，并在公网 ACL 中放行本地出口 IP；如果实例只开放 VPC，本地电脑不能直接推送。个人版按控制台“访问凭证”页面给出的公网登录地址操作即可。
 
 ## 获取代码
 
@@ -147,13 +152,13 @@ FC 本地挂载目录：/mnt/nas/sam3d
 
 旧版本脚本已经上传的资源前缀没有完成凭据。第一次使用新版脚本时，如果当前用户的 `$HOME/sam3d-transfer` 仍保留完整资源，脚本会复用本地文件、核对远端对象并补写凭据，不会重新下载；如果资源只存在于旧的 `/root/sam3d-transfer`，请先由管理员将该目录复制给当前用户并修正所有权。若本地文件不存在，则需要准备一次资源以建立可信凭据，之后的新 ECS 才能走 OSS 快速复用路径。
 
-镜像 tag 由 Git commit 和本地镜像配置摘要自动产生：
+镜像 tag 由 Git commit 和 Buildx 返回的本地镜像摘要自动产生：
 
 ```text
 sam3-sam3d-<12位Git提交>-<12位镜像摘要>
 ```
 
-如果远程 tag 已经是同一镜像，脚本跳过重复推送；如果同一不可变 tag 指向其他镜像，脚本拒绝覆盖。推送后还会重复回读远程配置摘要，避免把网络回包丢失误判为推送失败。
+如果远程 tag 已经是同一镜像，脚本跳过重复推送；如果同一不可变 tag 指向其他镜像，脚本拒绝覆盖。推送后还会按 Buildx 提供的摘要类型回读远程 config 或 manifest 摘要，避免把网络回包丢失误判为推送失败。
 
 ## OSS 资源与镜像边界
 

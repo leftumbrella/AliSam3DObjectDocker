@@ -2,7 +2,7 @@
 
 本项目把 SAM 3 点选分割和 SAM 3D Objects 重建放进同一个阿里云函数计算（FC）GPU 函数。浏览器只配置一个 HTTP 地址：鼠标点选调用 `POST /segment` 得到 Mask，再把原图和 Mask 交给同一地址的 `POST /generate`，返回 PLY 或 GLB。
 
-从全新的香港 ECS 上传离线资源并推送镜像时，请直接阅读 [香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)。
+从香港 ECS 或本地电脑的 WSL2 Ubuntu 上传离线资源并推送镜像时，请直接阅读 [香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)；两种环境都必须使用 OSS 和 ACR 公网地址。
 
 ## 当前架构
 
@@ -82,7 +82,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 ## 一键上传资源并推送镜像
 
-一键脚本可由香港 Ubuntu ECS 的普通用户直接运行，优先核对并复用 OSS 已完整发布的模型资源；没有可复用资源时，才在本地准备、校验并断点上传深圳 OSS，然后构建统一镜像并推送到 ACR。宿主 Python 不会安装项目包：辅助脚本在退出即删除的无 pip venv 中以 isolated mode 运行。脚本没有任何可选参数：
+一键脚本可由香港 Ubuntu ECS 或本地电脑的 WSL2 Ubuntu 普通用户直接运行，优先核对并复用 OSS 已完整发布的模型资源；没有可复用资源时，才在本地准备、校验并断点上传深圳 OSS，然后构建统一镜像并推送到 ACR。宿主 Python 不会安装项目包：辅助脚本在退出即删除的无 pip venv 中以 isolated mode 运行。脚本没有任何可选参数：
 
 ```bash
 ./scripts/deploy_from_hk.sh

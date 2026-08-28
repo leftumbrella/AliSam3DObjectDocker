@@ -1085,7 +1085,7 @@ EOF
 print_completion() {
   cat <<EOF
 
-香港 ECS 资源上传和镜像推送完成
+OSS 资源上传和镜像推送完成
 
   ACR 镜像：        $REMOTE_IMAGE
   OSS Bucket：      $OSS_BUCKET
