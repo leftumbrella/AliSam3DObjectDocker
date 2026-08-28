@@ -12,7 +12,7 @@ ARG SAM3_REF=8f0b7f4d4e7eda2ed606ebde6702c93359ad01da
 # PyTorch3D v0.7.9 contains the CUDA 12.6+ header compatibility fix that the
 # former upstream SAM3D pin predates.
 ARG PYTORCH3D_REF=33824be3cbc87a7dd1db0f6a9a9de9ac81b2d0ba
-ARG PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PYPI_INDEX_URL=http://mirrors.aliyun.com/pypi/simple/
 ARG PYTORCH_WHEEL_URL=https://mirrors.aliyun.com/pytorch-wheels/cu126
 ARG TORCH_CUDA_ARCH_LIST=8.9;9.0
 ARG MAX_JOBS=2
@@ -49,6 +49,8 @@ RUN micromamba create -y -p /opt/venv -c conda-forge \
 ENV PATH=/opt/venv/bin:${PATH} \
     CONDA_PREFIX=/opt/venv \
     CUDA_HOME=/usr/local/cuda \
+    PIP_INDEX_URL=${PYPI_INDEX_URL} \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     FORCE_CUDA=1 \
@@ -85,7 +87,6 @@ RUN git init \
 
 # Install the single Torch ABI before any native extension is compiled.
 RUN python -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
         --find-links "${PYTORCH_WHEEL_URL}" \
         torch==2.7.1+cu126 \
         torchvision==0.22.1+cu126
@@ -96,7 +97,6 @@ COPY requirements-server.txt /tmp/requirements-server.txt
 COPY constraints-unified.txt /tmp/constraints-unified.txt
 
 RUN python -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
         --constraint /tmp/constraints-unified.txt \
         -r /tmp/requirements-fc.txt \
         -r /tmp/requirements-segmenter.txt \
@@ -119,7 +119,6 @@ WORKDIR /opt/sam-3d-objects
 
 RUN python -m pip install \
         --no-deps \
-        --index-url "${PYPI_INDEX_URL}" \
         -e . \
     && ./patching/hydra
 
@@ -166,6 +165,7 @@ RUN rm -rf /opt/sam-3d-objects/.git /opt/sam3/.git \
 FROM ubuntu:22.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG PYPI_INDEX_URL=http://mirrors.aliyun.com/pypi/simple/
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -188,6 +188,8 @@ COPY scripts/check_runtime_imports.py /tmp/check_runtime_imports.py
 
 ENV PATH=/opt/venv/bin:${PATH} \
     CONDA_PREFIX=/opt/venv \
+    PIP_INDEX_URL=${PYPI_INDEX_URL} \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com \
     PYTHONPATH=/srv:/opt/sam-3d-objects:/opt/sam-3d-objects/notebook:/opt/sam3 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

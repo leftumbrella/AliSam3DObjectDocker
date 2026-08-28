@@ -46,6 +46,24 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
         self.assertNotIn("sam3d-builder", self.dockerfile)
         self.assertRegex(self.dockerfile, r"ARG SAM3_REF=[0-9a-f]{40}")
 
+    def test_pip_uses_aliyun_index_in_build_and_runtime(self) -> None:
+        self.assertEqual(
+            self.dockerfile.count(
+                "ARG PYPI_INDEX_URL=http://mirrors.aliyun.com/pypi/simple/"
+            ),
+            2,
+        )
+        self.assertEqual(
+            self.dockerfile.count("PIP_INDEX_URL=${PYPI_INDEX_URL}"),
+            2,
+        )
+        self.assertEqual(
+            self.dockerfile.count("PIP_TRUSTED_HOST=mirrors.aliyun.com"),
+            2,
+        )
+        self.assertIn("antlr4-python3-runtime==4.9.3", self.fc_requirements)
+        self.assertNotIn("files.pythonhosted.org", self.fc_requirements)
+
     def test_actual_model_builder_import_dependencies_are_explicit_and_gated(self) -> None:
         for dependency in (
             "einops==0.8.1",
