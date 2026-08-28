@@ -658,14 +658,115 @@ upload_offline_assets
         self.assertIn('IMAGE_TAG="sam3-sam3d-${GIT_COMMIT_SHORT}-${digest_hex:0:12}"', self.script)
         self.assertIn("remote_digest_matches_local_with_retry", self.script)
 
-    def test_config_digest_comes_from_buildx_metadata(self) -> None:
+    def test_build_digest_comes_from_buildx_metadata(self) -> None:
         self.assertIn('--metadata-file "$BUILD_METADATA_FILE"', self.script)
         self.assertIn('."containerimage.config.digest"', self.script)
         self.assertIn(
             '."containerimage.descriptor".annotations["config.digest"]',
             self.script,
         )
+        self.assertIn('."containerimage.descriptor".digest', self.script)
+        self.assertIn("get_remote_image_digest", self.script)
         self.assertNotIn("--format '{{.Id}}'", self.script)
+
+    def test_classic_buildx_metadata_keeps_config_digest_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / "metadata.json"
+            config_digest = "sha256:" + "2" * 64
+            manifest_digest = "sha256:" + "3" * 64
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "containerimage.config.digest": config_digest,
+                        "containerimage.descriptor": {
+                            "digest": manifest_digest,
+                            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        },
+                        "containerimage.digest": manifest_digest,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """
+source "$1"
+BUILD_METADATA_FILE="$2"
+select_local_image_digest
+EXPECTED_CONFIG_DIGEST="$3"
+run_docker() {
+  printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json",'
+  printf '"config":{"digest":"%s"}}\n' "$EXPECTED_CONFIG_DIGEST"
+}
+remote_digest="$(get_remote_image_digest 'registry.example/repo/image:tag')"
+printf 'KIND=%s\nDIGEST=%s\nREMOTE_DIGEST=%s\n' \
+  "$LOCAL_IMAGE_DIGEST_KIND" "$LOCAL_IMAGE_DIGEST" "$remote_digest"
+""",
+                    "bash",
+                    str(SCRIPT),
+                    str(metadata),
+                    config_digest,
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("KIND=config", result.stdout)
+            self.assertIn(f"DIGEST={config_digest}", result.stdout)
+            self.assertIn(f"REMOTE_DIGEST={config_digest}", result.stdout)
+
+    def test_containerd_buildx_metadata_uses_manifest_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / "metadata.json"
+            manifest_digest = "sha256:" + "1" * 64
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "containerimage.descriptor": {
+                            "digest": manifest_digest,
+                            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        },
+                        "containerimage.digest": manifest_digest,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """
+source "$1"
+BUILD_METADATA_FILE="$2"
+select_local_image_digest
+EXPECTED_MANIFEST_DIGEST="$3"
+run_docker() {
+  [[ "$1" == 'buildx' && "$2" == 'imagetools' && "$3" == 'inspect' \
+    && "$4" == '--format' && "$5" == '{{json .Manifest}}' ]] || return 9
+  printf '{"digest":"%s"}\n' "$EXPECTED_MANIFEST_DIGEST"
+}
+remote_digest="$(get_remote_image_digest 'registry.example/repo/image:tag')"
+printf 'KIND=%s\nDIGEST=%s\nREMOTE_DIGEST=%s\n' \
+  "$LOCAL_IMAGE_DIGEST_KIND" "$LOCAL_IMAGE_DIGEST" "$remote_digest"
+""",
+                    "bash",
+                    str(SCRIPT),
+                    str(metadata),
+                    manifest_digest,
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("KIND=manifest", result.stdout)
+            self.assertIn(f"DIGEST={manifest_digest}", result.stdout)
+            self.assertIn(f"REMOTE_DIGEST={manifest_digest}", result.stdout)
 
     def test_build_pins_match_the_dockerfile(self) -> None:
         for docker_arg, script_constant in (

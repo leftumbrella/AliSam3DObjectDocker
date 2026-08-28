@@ -38,7 +38,8 @@ GIT_COMMIT_SHORT=''
 IMAGE_TAG=''
 LOCAL_IMAGE=''
 REMOTE_IMAGE=''
-LOCAL_CONFIG_DIGEST=''
+LOCAL_IMAGE_DIGEST=''
+LOCAL_IMAGE_DIGEST_KIND=''
 BUILD_METADATA_FILE=''
 ASSET_RELEASE=''
 ASSET_RECIPE_ID=''
@@ -334,6 +335,38 @@ ensure_docker() {
   run_docker buildx inspect --bootstrap >/dev/null
 }
 
+select_local_image_digest() {
+  local config_digest manifest_digest
+
+  config_digest="$(
+    jq -r \
+      '."containerimage.config.digest"
+       // ."containerimage.descriptor".annotations["config.digest"]
+       // empty' \
+      "$BUILD_METADATA_FILE"
+  )" || die '无法读取 Buildx 镜像元数据'
+  if [[ -n "$config_digest" ]]; then
+    [[ "$config_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+      || die 'Buildx 返回的镜像配置摘要格式无效'
+    LOCAL_IMAGE_DIGEST="$config_digest"
+    LOCAL_IMAGE_DIGEST_KIND='config'
+    return
+  fi
+
+  manifest_digest="$(
+    jq -r \
+      '."containerimage.descriptor".digest
+       // ."containerimage.digest"
+       // empty' \
+      "$BUILD_METADATA_FILE"
+  )" || die '无法读取 Buildx 镜像元数据'
+  [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || die 'Buildx 元数据未包含有效的镜像配置或 manifest 摘要'
+  LOCAL_IMAGE_DIGEST="$manifest_digest"
+  LOCAL_IMAGE_DIGEST_KIND='manifest'
+  log 'Buildx 未返回配置摘要，使用 containerd 兼容的 manifest 摘要校验镜像'
+}
+
 build_image() {
   CURRENT_STEP='构建 SAM3/SAM3D 统一 linux/amd64 镜像'
   cd "$PROJECT_ROOT"
@@ -358,16 +391,8 @@ build_image() {
   [[ "$platform" == 'linux/amd64' ]] || die "本地镜像平台错误：$platform"
   image_size="$(run_docker image inspect "$LOCAL_IMAGE" --format '{{.Size}}')"
   [[ "$image_size" =~ ^[0-9]+$ ]] || die '无法读取本地镜像大小'
-  LOCAL_CONFIG_DIGEST="$(
-    jq -er \
-      '."containerimage.config.digest"
-       // ."containerimage.descriptor".annotations["config.digest"]
-       // empty' \
-      "$BUILD_METADATA_FILE"
-  )" || die 'Buildx 元数据未包含镜像配置摘要'
-  [[ "$LOCAL_CONFIG_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
-    || die 'Buildx 返回的镜像配置摘要格式无效'
-  digest_hex=${LOCAL_CONFIG_DIGEST#sha256:}
+  select_local_image_digest
+  digest_hex=${LOCAL_IMAGE_DIGEST#sha256:}
   IMAGE_TAG="sam3-sam3d-${GIT_COMMIT_SHORT}-${digest_hex:0:12}"
   REMOTE_IMAGE="${ACR_IMAGE}:${IMAGE_TAG}"
   log "镜像构建完成：$LOCAL_IMAGE，未压缩大小 ${image_size} 字节"
@@ -894,17 +919,50 @@ get_remote_config_digest() {
   printf '%s' "$config_digest"
 }
 
+get_remote_manifest_digest() {
+  local remote_image=$1
+  local manifest_json lookup_error manifest_digest
+
+  if ! manifest_json="$(
+    run_docker buildx imagetools inspect \
+      --format '{{json .Manifest}}' \
+      "$remote_image" 2>&1
+  )"; then
+    lookup_error=${manifest_json,,}
+    case "$lookup_error" in
+      *'not found'*|*'manifest unknown'*|*'name unknown'*) return 1 ;;
+      *)
+        warn "无法确定远程标签状态：$manifest_json"
+        return 2
+        ;;
+    esac
+  fi
+
+  manifest_digest="$(jq -r '.digest // empty' <<<"$manifest_json")"
+  [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 2
+  printf '%s' "$manifest_digest"
+}
+
+get_remote_image_digest() {
+  local remote_image=$1
+  case "$LOCAL_IMAGE_DIGEST_KIND" in
+    config) get_remote_config_digest "$remote_image" ;;
+    manifest) get_remote_manifest_digest "$remote_image" ;;
+    *) return 2 ;;
+  esac
+}
+
 remote_tag_matches_local_image() {
   local remote_digest status
 
   set +e
-  remote_digest="$(get_remote_config_digest "$REMOTE_IMAGE")"
+  remote_digest="$(get_remote_image_digest "$REMOTE_IMAGE")"
   status=$?
   set -e
 
   case "$status" in
     0)
-      if [[ "$remote_digest" == "$LOCAL_CONFIG_DIGEST" ]]; then
+      if [[ "$remote_digest" == "$LOCAL_IMAGE_DIGEST" ]]; then
         return 0
       fi
       die "远程不可变标签已指向另一镜像，拒绝覆盖：$REMOTE_IMAGE"
@@ -918,10 +976,10 @@ remote_digest_matches_local_with_retry() {
   local attempt remote_digest status
   for attempt in 1 2 3 4 5; do
     set +e
-    remote_digest="$(get_remote_config_digest "$REMOTE_IMAGE")"
+    remote_digest="$(get_remote_image_digest "$REMOTE_IMAGE")"
     status=$?
     set -e
-    if [[ "$status" -eq 0 && "$remote_digest" == "$LOCAL_CONFIG_DIGEST" ]]; then
+    if [[ "$status" -eq 0 && "$remote_digest" == "$LOCAL_IMAGE_DIGEST" ]]; then
       return 0
     fi
     [[ "$attempt" -eq 5 ]] || sleep "$attempt"
@@ -942,11 +1000,11 @@ push_image() {
   for attempt in 1 2 3; do
     if run_docker push "$REMOTE_IMAGE"; then
       remote_digest_matches_local_with_retry \
-        || die '镜像已推送，但远程配置摘要未与本地镜像一致'
+        || die '镜像已推送，但远程镜像摘要未与本地镜像一致'
       return
     fi
     if remote_digest_matches_local_with_retry; then
-      log 'push 回包失败，但远程配置摘要已确认与本地镜像一致'
+      log 'push 回包失败，但远程镜像摘要已确认与本地镜像一致'
       return
     fi
     if [[ "$attempt" -eq 3 ]]; then
@@ -986,7 +1044,7 @@ verify_remote_manifest() {
   [[ "$platforms" == 'linux/amd64' ]] \
     || die "远程镜像必须且只能包含 linux/amd64，实际平台：${platforms:-无法识别}"
   remote_digest_matches_local_with_retry \
-    || die 'Manifest 校验后远程配置摘要与本地镜像不一致'
+    || die 'Manifest 校验后远程镜像摘要与本地镜像不一致'
   log 'ACR 远程 Manifest 校验通过'
 }
 
