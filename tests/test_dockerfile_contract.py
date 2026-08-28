@@ -130,7 +130,9 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
         self.assertIn(proxy_prefix, self.dockerfile)
 
     def test_final_runtime_repeats_the_import_and_abi_gate(self) -> None:
-        runtime_stage = self.dockerfile.index("FROM ubuntu:22.04 AS runtime")
+        runtime_stage = self.dockerfile.index(
+            "FROM docker.1ms.run/library/ubuntu:22.04 AS runtime"
+        )
         final_copy = self.dockerfile.index(
             "COPY scripts/check_runtime_imports.py /tmp/check_runtime_imports.py",
             runtime_stage,

@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS unified-builder
+FROM docker.1ms.run/nvidia/cuda:12.6.3-devel-ubuntu22.04 AS unified-builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG MICROMAMBA_VERSION=2.8.1-0
@@ -162,7 +162,7 @@ RUN rm -rf /opt/sam-3d-objects/.git /opt/sam3/.git \
         /tmp/check_runtime_imports.py \
         /tmp/patch_offline_runtime.py
 
-FROM ubuntu:22.04 AS runtime
+FROM docker.1ms.run/library/ubuntu:22.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PYPI_INDEX_URL=http://mirrors.aliyun.com/pypi/simple/

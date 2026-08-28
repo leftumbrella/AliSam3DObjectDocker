@@ -29,10 +29,13 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
 
     def test_unified_runtime_is_python312_torch27_cuda126(self) -> None:
         self.assertIn(
-            "FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS unified-builder",
+            "FROM docker.1ms.run/nvidia/cuda:12.6.3-devel-ubuntu22.04 AS unified-builder",
             self.dockerfile,
         )
-        self.assertIn("FROM ubuntu:22.04 AS runtime", self.dockerfile)
+        self.assertIn(
+            "FROM docker.1ms.run/library/ubuntu:22.04 AS runtime",
+            self.dockerfile,
+        )
         self.assertEqual(self.dockerfile.count("\nFROM "), 1)
         self.assertIn("micromamba create -y -p /opt/venv", self.dockerfile)
         self.assertIn("python=3.12.11", self.dockerfile)
