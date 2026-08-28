@@ -7,6 +7,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -120,6 +121,8 @@ DINOV2_DIRECTORY = "facebookresearch_dinov2_main"
 DINOV2_WEIGHT = "dinov2_vitl14_reg4_pretrain.pth"
 SOURCE_REF_MARKER = ".sam3d-offline-ref"
 CHECKSUM_MANIFEST = "offline-assets.sha256"
+# Increment this whenever bundle paths or deterministic transformations change.
+BUNDLE_RECIPE_SCHEMA = 1
 MOGE_ENTRY_PATTERN = re.compile(
     r"^(?P<prefix>[ \t]*pretrained_model_name_or_path[ \t]*:[ \t]*)"
     r"(?P<quote>['\"]?)(?P<value>[^'\"\s#]+)(?P=quote)"
@@ -143,6 +146,58 @@ KNOWN_CHECKPOINT_FILES = {
     "ss_encoder_config_path": ("ss_encoder.yaml", 231),
     "ss_encoder_ckpt_path": ("ss_encoder.ckpt", 119_085_402),
 }
+
+
+def bundle_recipe() -> dict[str, object]:
+    """Describe content inputs without coupling identity to download mirrors."""
+    return {
+        "schema": BUNDLE_RECIPE_SCHEMA,
+        "sam3d": {
+            "repository": SAM3D_REPOSITORY,
+            "revision": SAM3D_MODELSCOPE_REVISION,
+            "files": [
+                {
+                    "path": filename,
+                    "size": expected_size,
+                    "sha256": expected_sha256,
+                }
+                for filename, (expected_size, expected_sha256) in sorted(
+                    SAM3D_MODELSCOPE_FILES.items()
+                )
+            ],
+        },
+        "sam3": {
+            "repository": SAM3_REPOSITORY,
+            "revision": SAM3_MODELSCOPE_REVISION,
+            "path": f"sam3/{SAM3_FILENAME}",
+            "size": SAM3_WEIGHT_SIZE,
+            "sha256": SAM3_WEIGHT_SHA256,
+        },
+        "dinov2": {
+            "source_ref": DINOV2_REF,
+            "source_directory": DINOV2_DIRECTORY,
+            "source_ref_marker": SOURCE_REF_MARKER,
+            "weight_path": f"cache/torch/hub/checkpoints/{DINOV2_WEIGHT}",
+            "weight_size": DINOV2_WEIGHT_SIZE,
+            "weight_sha256": DINOV2_WEIGHT_SHA256,
+        },
+        "moge": {
+            "source_ref": MOGE_REF,
+            "runtime_path": MOGE_RUNTIME_PATH,
+            "weight_size": MOGE_WEIGHT_SIZE,
+            "weight_sha256": MOGE_WEIGHT_SHA256,
+        },
+    }
+
+
+def bundle_recipe_id() -> str:
+    encoded = json.dumps(
+        bundle_recipe(),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 MAIN_CHECKPOINT_KEYS = (
     "ss_generator_config_path",
     "ss_generator_ckpt_path",
@@ -854,20 +909,32 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="verify only storage/sam3/sam3.pt",
     )
-    args = parser.parse_args()
-    verification_modes = sum(
-        int(value)
-        for value in (args.verify_only, args.verify_main_only, args.verify_sam3_only)
+    parser.add_argument(
+        "--print-recipe-id",
+        action="store_true",
+        help="print the deterministic offline bundle recipe ID and exit",
     )
-    if verification_modes > 1:
-        parser.error("verification modes are mutually exclusive")
-    if verification_modes and (
+    args = parser.parse_args()
+    exclusive_modes = sum(
+        int(value)
+        for value in (
+            args.verify_only,
+            args.verify_main_only,
+            args.verify_sam3_only,
+            args.print_recipe_id,
+        )
+    )
+    if exclusive_modes > 1:
+        parser.error("verification and recipe modes are mutually exclusive")
+    if exclusive_modes and (
         args.download_sam3d
         or args.sam3d_source
         or args.download_sam3
         or args.sam3_source
     ):
-        parser.error("verification modes cannot be combined with download/source options")
+        parser.error(
+            "verification and recipe modes cannot be combined with download/source options"
+        )
     if args.download_sam3d and args.sam3d_source:
         parser.error("--download-sam3d and --sam3d-source are mutually exclusive")
     if args.download_sam3 and args.sam3_source:
@@ -878,6 +945,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        if args.print_recipe_id:
+            print(bundle_recipe_id())
+            return 0
         transfer_root = validated_transfer_root(args.transfer_root)
         if args.verify_only:
             verify_bundle(transfer_root)

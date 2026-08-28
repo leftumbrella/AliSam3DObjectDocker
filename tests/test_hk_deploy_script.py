@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 import os
 import re
@@ -18,6 +20,8 @@ DEPLOYMENT = ROOT / "DEPLOYMENT.md"
 
 
 class HongKongDeployScriptTests(unittest.TestCase):
+    RECIPE_ID = "a" * 64
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.script = SCRIPT.read_text(encoding="utf-8")
@@ -84,6 +88,9 @@ class HongKongDeployScriptTests(unittest.TestCase):
             "ensure_oss_access",
             "upload_offline_assets",
             "verify_remote_oss_inventory",
+            "reuse_remote_offline_assets",
+            "publish_asset_receipt",
+            "complete.json",
             "scripts/prepare_offline_assets.py",
             "--download-sam3d",
             "--download-sam3",
@@ -115,8 +122,10 @@ class HongKongDeployScriptTests(unittest.TestCase):
         ordered_steps = (
             "ensure_tool_venv",
             "ensure_ossutil",
-            "prepare_offline_assets",
+            "resolve_asset_recipe",
             "ensure_oss_access",
+            "reuse_remote_offline_assets",
+            "prepare_offline_assets",
             "upload_offline_assets",
             "build_image",
             "login_acr",
@@ -139,6 +148,195 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertNotIn("huggingface_hub", self.script)
         self.assertNotIn("needs_huggingface", self.script)
 
+    def test_complete_remote_recipe_skips_model_download_and_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            receipt = root / "complete.json"
+            calls = root / "ossutil-calls.log"
+            fake_ossutil = root / "ossutil"
+            manifest_sha256 = "b" * 64
+            asset_release = "bundle-" + manifest_sha256[:12]
+            receipt.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "recipe_id": self.RECIPE_ID,
+                        "asset_release": asset_release,
+                        "manifest_sha256": manifest_sha256,
+                        "object_count": 2,
+                        "objects": [
+                            {"crc64": "111", "key": "offline-assets.sha256"},
+                            {"crc64": "222", "key": "sam3/sam3.pt"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fake_ossutil.write_text(
+                """#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_OSS_LOG"
+if [ "$1" = "cp" ] && [ "$2" = "-f" ]; then
+  cp "$FAKE_RECEIPT" "$4"
+elif [ "$1" = "hash" ]; then
+  case "$3" in
+    */offline-assets.sha256) printf '111  %s\\n' "$3" ;;
+    */sam3/sam3.pt) printf '222  %s\\n' "$3" ;;
+    *) exit 3 ;;
+  esac
+fi
+""",
+                encoding="utf-8",
+            )
+            fake_ossutil.chmod(0o755)
+            env = os.environ.copy()
+            env["FAKE_OSS_LOG"] = str(calls)
+            env["FAKE_RECEIPT"] = str(receipt)
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """
+source "$1"
+TRANSFER_ROOT="$2"
+OSS_BUCKET='example-bucket'
+ASSET_RECIPE_ID="$4"
+ASSET_RECEIPT_KEY="sam3d/recipes/${ASSET_RECIPE_ID}/complete.json"
+OSSUTIL_BIN="$3"
+ensure_transfer_root
+reuse_remote_offline_assets
+printf 'REUSED_PREFIX=%s\\n' "$OSS_PREFIX"
+""",
+                    "bash",
+                    str(SCRIPT),
+                    str(root / "transfer"),
+                    str(fake_ossutil),
+                    self.RECIPE_ID,
+                ],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                f"REUSED_PREFIX=sam3d/releases/{asset_release}",
+                result.stdout,
+            )
+            calls_text = calls.read_text(encoding="utf-8")
+            self.assertIn(
+                f"oss://example-bucket/sam3d/recipes/{self.RECIPE_ID}/complete.json",
+                calls_text,
+            )
+            self.assertIn("offline-assets.sha256", calls_text)
+            self.assertIn("sam3/sam3.pt", calls_text)
+            self.assertNotIn("cp -u -r", calls_text)
+
+    def test_remote_recipe_crc_mismatch_falls_back_to_local_preparation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            receipt = root / "complete.json"
+            fake_ossutil = root / "ossutil"
+            manifest_sha256 = "c" * 64
+            receipt.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "recipe_id": self.RECIPE_ID,
+                        "asset_release": "bundle-" + manifest_sha256[:12],
+                        "manifest_sha256": manifest_sha256,
+                        "object_count": 1,
+                        "objects": [
+                            {"crc64": "111", "key": "offline-assets.sha256"}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fake_ossutil.write_text(
+                """#!/bin/sh
+if [ "$1" = "cp" ] && [ "$2" = "-f" ]; then
+  cp "$FAKE_RECEIPT" "$4"
+elif [ "$1" = "hash" ]; then
+  printf '999  %s\\n' "$3"
+fi
+""",
+                encoding="utf-8",
+            )
+            fake_ossutil.chmod(0o755)
+            env = os.environ.copy()
+            env["FAKE_RECEIPT"] = str(receipt)
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """
+source "$1"
+OSS_BUCKET='example-bucket'
+ASSET_RECIPE_ID="$3"
+ASSET_RECEIPT_KEY="sam3d/recipes/${ASSET_RECIPE_ID}/complete.json"
+OSSUTIL_BIN="$2"
+if reuse_remote_offline_assets; then
+  exit 9
+fi
+printf 'FALLBACK\\n'
+""",
+                    "bash",
+                    str(SCRIPT),
+                    str(fake_ossutil),
+                    self.RECIPE_ID,
+                ],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("FALLBACK", result.stdout)
+            self.assertIn("CRC64 不匹配", result.stderr)
+
+    def test_missing_remote_recipe_falls_back_to_local_preparation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_ossutil = root / "ossutil"
+            fake_ossutil.write_text(
+                """#!/bin/sh
+printf 'Error: NoSuchKey: receipt does not exist\n' >&2
+exit 1
+""",
+                encoding="utf-8",
+            )
+            fake_ossutil.chmod(0o755)
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """
+source "$1"
+OSS_BUCKET='example-bucket'
+ASSET_RECIPE_ID="$3"
+ASSET_RECEIPT_KEY="sam3d/recipes/${ASSET_RECIPE_ID}/complete.json"
+OSSUTIL_BIN="$2"
+if reuse_remote_offline_assets; then
+  exit 9
+fi
+printf 'FALLBACK\n'
+""",
+                    "bash",
+                    str(SCRIPT),
+                    str(fake_ossutil),
+                    self.RECIPE_ID,
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("FALLBACK", result.stdout)
+            self.assertIn("尚无当前资源配方的完成凭据", result.stdout)
+
     def test_upload_verifies_every_checksum_manifest_object(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -155,6 +353,9 @@ class HongKongDeployScriptTests(unittest.TestCase):
                 "".join(f"{'0' * 64}  {key}\n" for key in keys),
                 encoding="utf-8",
             )
+            asset_release = "bundle-" + hashlib.sha256(
+                manifest.read_bytes()
+            ).hexdigest()[:12]
             for key in keys:
                 path = storage / key
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,12 +365,17 @@ class HongKongDeployScriptTests(unittest.TestCase):
             git_metadata.write_text("ref: refs/heads/main\n", encoding="utf-8")
 
             calls = root / "ossutil-calls.log"
+            receipt_capture = root / "complete.json"
             fake_ossutil = root / "ossutil"
             fake_ossutil.write_text(
                 """#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_OSS_LOG"
 if [ "$1" = "hash" ]; then
   printf '123  %s\\n' "$3"
+elif [ "$1" = "cp" ] && [ "$2" = "-f" ]; then
+  case "$4" in
+    oss://*/complete.json) cp "$3" "$FAKE_RECEIPT_CAPTURE" ;;
+  esac
 fi
 """,
                 encoding="utf-8",
@@ -177,6 +383,7 @@ fi
             fake_ossutil.chmod(0o755)
             env = os.environ.copy()
             env["FAKE_OSS_LOG"] = str(calls)
+            env["FAKE_RECEIPT_CAPTURE"] = str(receipt_capture)
             result = subprocess.run(
                 [
                     "bash",
@@ -185,8 +392,10 @@ fi
 source "$1"
 TRANSFER_ROOT="$2"
 OSS_BUCKET='example-bucket'
-OSS_PREFIX='sam3d/releases/bundle-test'
-ASSET_RELEASE='bundle-test'
+ASSET_RELEASE="$4"
+OSS_PREFIX="sam3d/releases/${ASSET_RELEASE}"
+ASSET_RECIPE_ID="$5"
+ASSET_RECEIPT_KEY="sam3d/recipes/${ASSET_RECIPE_ID}/complete.json"
 OSSUTIL_BIN="$3"
 upload_offline_assets
 """,
@@ -194,6 +403,8 @@ upload_offline_assets
                     str(SCRIPT),
                     str(transfer_root),
                     str(fake_ossutil),
+                    asset_release,
+                    self.RECIPE_ID,
                 ],
                 cwd=ROOT,
                 env=env,
@@ -216,12 +427,21 @@ upload_offline_assets
             for key in keys:
                 with self.subTest(key=key):
                     self.assertIn(key, calls_text)
-            upload_list = transfer_root / "oss-upload-files-bundle-test.txt"
+            upload_list = transfer_root / f"oss-upload-files-{asset_release}.txt"
             self.assertEqual(
                 upload_list.read_text(encoding="utf-8").splitlines(),
                 ["offline-assets.sha256", *keys],
             )
             self.assertNotIn(".git", upload_list.read_text(encoding="utf-8"))
+            receipt = json.loads(receipt_capture.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], 1)
+            self.assertEqual(receipt["recipe_id"], self.RECIPE_ID)
+            self.assertEqual(receipt["asset_release"], asset_release)
+            self.assertEqual(receipt["object_count"], len(keys) + 1)
+            self.assertEqual(
+                {entry["key"] for entry in receipt["objects"]},
+                {"offline-assets.sha256", *keys},
+            )
 
     def test_crc_mismatch_is_repaired_with_an_exact_object_upload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -231,10 +451,14 @@ upload_offline_assets
             checkpoint = storage / "sam3" / "sam3.pt"
             checkpoint.parent.mkdir(parents=True)
             checkpoint.write_text("checkpoint", encoding="utf-8")
-            (storage / "offline-assets.sha256").write_text(
+            manifest = storage / "offline-assets.sha256"
+            manifest.write_text(
                 f"{'0' * 64}  sam3/sam3.pt\n",
                 encoding="utf-8",
             )
+            asset_release = "bundle-" + hashlib.sha256(
+                manifest.read_bytes()
+            ).hexdigest()[:12]
 
             calls = root / "ossutil-calls.log"
             repaired = root / "repaired"
@@ -271,8 +495,10 @@ fi
 source "$1"
 TRANSFER_ROOT="$2"
 OSS_BUCKET='example-bucket'
-OSS_PREFIX='sam3d/releases/bundle-test'
-ASSET_RELEASE='bundle-test'
+ASSET_RELEASE="$4"
+OSS_PREFIX="sam3d/releases/${ASSET_RELEASE}"
+ASSET_RECIPE_ID="$5"
+ASSET_RECEIPT_KEY="sam3d/recipes/${ASSET_RECIPE_ID}/complete.json"
 OSSUTIL_BIN="$3"
 upload_offline_assets
 """,
@@ -280,6 +506,8 @@ upload_offline_assets
                     str(SCRIPT),
                     str(transfer_root),
                     str(fake_ossutil),
+                    asset_release,
+                    self.RECIPE_ID,
                 ],
                 cwd=ROOT,
                 env=env,
@@ -293,7 +521,7 @@ upload_offline_assets
             self.assertIn(
                 "cp -f "
                 + str(checkpoint)
-                + " oss://example-bucket/sam3d/releases/bundle-test/sam3/sam3.pt",
+                + f" oss://example-bucket/sam3d/releases/{asset_release}/sam3/sam3.pt",
                 calls_text,
             )
             self.assertNotIn("ls oss://example-bucket/sam3d/releases", calls_text)
@@ -306,10 +534,14 @@ upload_offline_assets
             checkpoint = storage / "sam3" / "sam3.pt"
             checkpoint.parent.mkdir(parents=True)
             checkpoint.write_text("checkpoint", encoding="utf-8")
-            (storage / "offline-assets.sha256").write_text(
+            manifest = storage / "offline-assets.sha256"
+            manifest.write_text(
                 f"{'0' * 64}  sam3/sam3.pt\n",
                 encoding="utf-8",
             )
+            asset_release = "bundle-" + hashlib.sha256(
+                manifest.read_bytes()
+            ).hexdigest()[:12]
 
             fake_ossutil = root / "ossutil"
             fake_ossutil.write_text(
@@ -338,8 +570,10 @@ exit 0
 source "$1"
 TRANSFER_ROOT="$2"
 OSS_BUCKET='example-bucket'
-OSS_PREFIX='sam3d/releases/bundle-test'
-ASSET_RELEASE='bundle-test'
+ASSET_RELEASE="$4"
+OSS_PREFIX="sam3d/releases/${ASSET_RELEASE}"
+ASSET_RECIPE_ID="$5"
+ASSET_RECEIPT_KEY="sam3d/recipes/${ASSET_RECIPE_ID}/complete.json"
 OSSUTIL_BIN="$3"
 upload_offline_assets
 """,
@@ -347,6 +581,8 @@ upload_offline_assets
                     str(SCRIPT),
                     str(transfer_root),
                     str(fake_ossutil),
+                    asset_release,
+                    self.RECIPE_ID,
                 ],
                 cwd=ROOT,
                 text=True,

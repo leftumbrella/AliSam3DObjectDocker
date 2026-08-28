@@ -291,6 +291,31 @@ class OfflineAssetPreparationTests(unittest.TestCase):
             f"{offline_assets.MOGE_REF}/model.pt",
         )
 
+    def test_bundle_recipe_id_tracks_content_instead_of_mirror_urls(self) -> None:
+        recipe_id = offline_assets.bundle_recipe_id()
+        self.assertRegex(recipe_id, r"^[0-9a-f]{64}$")
+
+        with (
+            mock.patch.object(
+                offline_assets,
+                "DINOV2_REPOSITORY",
+                "https://example.invalid/dinov2.git",
+            ),
+            mock.patch.object(
+                offline_assets,
+                "MOGE_WEIGHT_URL",
+                "https://example.invalid/moge/model.pt",
+            ),
+        ):
+            self.assertEqual(offline_assets.bundle_recipe_id(), recipe_id)
+
+        with mock.patch.object(
+            offline_assets,
+            "DINOV2_WEIGHT_SHA256",
+            "0" * 64,
+        ):
+            self.assertNotEqual(offline_assets.bundle_recipe_id(), recipe_id)
+
     def test_sam3d_download_uses_pinned_modelscope_urls(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             download_root = Path(directory)
@@ -372,6 +397,7 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         self.assertIn("--verify-only", help_result.stdout)
         self.assertIn("--verify-main-only", help_result.stdout)
         self.assertIn("--verify-sam3-only", help_result.stdout)
+        self.assertIn("--print-recipe-id", help_result.stdout)
         self.assertIn("--download-sam3", help_result.stdout)
         self.assertIn("--sam3-source", help_result.stdout)
         self.assertIn("ModelScope", help_result.stdout)

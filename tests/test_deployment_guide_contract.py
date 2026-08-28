@@ -64,6 +64,9 @@ class DeploymentGuideContractTests(unittest.TestCase):
             "Docker 构建缓存",
             "精确上传清单",
             "CRC64",
+            "sam3d/recipes/<资源配方 ID>/complete.json",
+            "跳过全部模型下载和上传",
+            "docker.1ms.run",
             "/root/sam3d-transfer/ossutil-output",
             "构建完成后才登录 ACR",
         ):

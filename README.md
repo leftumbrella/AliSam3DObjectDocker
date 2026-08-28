@@ -68,7 +68,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 ├── segmenter/               # SAM3 内部服务与点选推理
 ├── shared/gpu_lock.py       # 两个进程共用的 GPU 文件锁
 ├── scripts/
-│   ├── deploy_from_hk.sh    # 零参数准备资源、上传 OSS 并推送 ACR
+│   ├── deploy_from_hk.sh    # OSS 优先复用资源，必要时上传并推送 ACR
 │   ├── configure_fc.py      # 幂等配置一个 FC 函数
 │   ├── fc_initializer.sh    # FC Initializer 回调
 │   └── prepare_offline_assets.py
@@ -82,13 +82,13 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 ## 一键上传资源并推送镜像
 
-一键脚本在香港 Ubuntu ECS 上准备并校验完整模型资源、断点上传深圳 OSS，然后构建统一镜像并推送到 ACR。脚本没有任何可选参数：
+一键脚本在香港 Ubuntu ECS 上优先核对并复用 OSS 已完整发布的模型资源；没有可复用资源时，才在本地准备、校验并断点上传深圳 OSS，然后构建统一镜像并推送到 ACR。脚本没有任何可选参数：
 
 ```bash
 ./scripts/deploy_from_hk.sh
 ```
 
-运行时输入深圳 OSS Bucket、ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码。SAM3 与 SAM3D 主权重均从魔搭社区（ModelScope）公开模型下载，MoGe 与 DINOv2 权重通过 HF-Mirror 下载，均不需要 Hugging Face Token。现有 OSS 身份不可用时才读取临时 RAM/STS 凭证。SAM3、SAM3D、MoGe、DINOv2 下载与校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、镜像构建、推送重试和 Manifest 校验均自动完成。
+运行时输入深圳 OSS Bucket、ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码。脚本先根据固定资源内容计算配方 ID，并检查 `sam3d/recipes/<资源配方 ID>/complete.json`；完成凭据及全部远端对象 CRC64 一致时会跳过模型下载和上传。否则，SAM3 与 SAM3D 主权重从魔搭社区（ModelScope）公开模型下载，MoGe 与 DINOv2 权重通过 HF-Mirror 下载，均不需要 Hugging Face Token。现有 OSS 身份不可用时才读取临时 RAM/STS 凭证。模型校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、完成凭据最后发布、镜像构建、推送重试和 Manifest 校验均自动完成。
 
 脚本不会创建或修改 FC，也不会启动 GPU。完成输出会给出 ACR 镜像、OSS Bucket 子目录以及固定的容器挂载目录 `/mnt/nas/sam3d`。
 
@@ -137,7 +137,7 @@ docker manifest inspect --verbose "$REMOTE_IMAGE" | grep -q 'unknown/unknown' &&
 
 容器设置 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1` 和 `HF_DATASETS_OFFLINE=1`。扩容时不会从公网下载模型；缺少任一必要文件会使 Initializer 失败，而不是让首个业务请求临时下载或加载。
 
-`scripts/deploy_from_hk.sh` 会自动调用 `scripts/prepare_offline_assets.py`，并在上传前后执行完整资源门禁。也可以单独调用后者只准备或校验本地资源包。
+`scripts/deploy_from_hk.sh` 会先核对 OSS 完成凭据；无法安全复用时才调用 `scripts/prepare_offline_assets.py`，并在上传前后执行完整资源门禁。也可以单独调用后者只准备或校验本地资源包。
 
 ## HTTP 接口
 
@@ -206,7 +206,7 @@ curl -fS -X POST "$FC_URL/generate" \
 - 默认弹性配置只允许一个实例。如果将 reserved concurrency 调高，跨进程文件锁只保护单个容器，不能跨 FC 实例互斥。
 - 统一环境消除了重复的 Python/PyTorch/CUDA 用户态依赖，但两个服务进程仍各自创建 CUDA context，并且两套模型权重仍会常驻显存；显存只能在目标 GPU 上确认。
 - `CORS_ALLOW_ORIGINS=*` 适合匿名测试触发器；生产环境应限制 Origin，并选择符合业务要求的触发器认证方式。
-- 一键脚本不会创建或修改函数计算，也不会创建或删除 OSS Bucket、旧资源前缀及旧镜像；它只向当前内容寻址前缀写入并校验清单内对象。
+- 一键脚本不会创建或修改函数计算，也不会创建或删除 OSS Bucket、旧资源前缀及旧镜像；它只向当前内容寻址前缀写入并校验清单内对象，并在全部对象成功后更新当前资源配方的完成凭据。
 
 ## 查证资料
 

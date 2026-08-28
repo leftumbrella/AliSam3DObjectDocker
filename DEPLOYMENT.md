@@ -1,6 +1,6 @@
 # 香港 ECS 上传 OSS 并推送 ACR 手册
 
-本手册使用一个前台脚本连续完成两项工作：准备并校验完整离线模型资源（SAM 3 + SAM 3D Objects）并上传深圳 OSS；构建统一镜像并推送到阿里云容器镜像服务 ACR。
+本手册使用一个前台脚本连续完成两项工作：优先复用 OSS 中已经完整发布的离线模型资源，必要时准备并校验完整离线模型资源（SAM 3 + SAM 3D Objects）并上传深圳 OSS；构建统一镜像并推送到阿里云容器镜像服务 ACR。
 
 脚本不会创建或修改函数计算，也不会启动 GPU。OSS Bucket、ACR 仓库、模型授权和云端访问身份需要提前准备。
 
@@ -13,7 +13,7 @@
 - Ubuntu 22.04 或 24.04。
 - x86_64/amd64 架构。
 - 建议至少 100 GB 可用磁盘和 32 GB 内存。
-- 能访问 GitHub、Hugging Face、ModelScope（魔塔社区）、PyPI、PyTorch、Docker Hub、深圳 OSS 公网地址和目标 ACR 公网地址。
+- 能访问 `v4.gh-proxy.org`、`hf-mirror.com`、ModelScope（魔塔社区）、阿里云 PyPI/PyTorch 镜像、`docker.1ms.run`、Docker CE 软件源、深圳 OSS 公网地址和目标 ACR 公网地址。
 - 使用 `root` 运行脚本。
 
 构建过程不需要 GPU。CUDA 扩展会在 CUDA devel 构建镜像内编译。
@@ -30,7 +30,7 @@
    https://oss-cn-shenzhen.aliyuncs.com
    ```
 
-脚本把完整资源包上传到新的内容寻址前缀 `sam3d/releases/bundle-<资源清单摘要>/`，不会覆盖旧版本资源包。
+脚本把完整资源包上传到新的内容寻址前缀 `sam3d/releases/bundle-<资源清单摘要>/`，不会覆盖旧版本资源包。全部对象通过 CRC64 核对后，脚本最后写入 `sam3d/recipes/<资源配方 ID>/complete.json` 完成凭据；下一台全新的构建机可据此确认同一资源配方已经完整发布。
 
 ### ACR
 
@@ -103,17 +103,19 @@ AccessKey Secret、STS Token 和 Registry 密码不会出现在命令行参数�
 
 1. 检查 Ubuntu、CPU 架构、磁盘、内存和干净的 Git checkout。
 2. 安装或复用 Docker CE、Buildx、隔离的 Python 工具环境和校验过的 ossutil 2.3.0。
-3. 调用 `scripts/prepare_offline_assets.py`，从 ModelScope 下载固定版本的 SAM3 与 SAM3D 主权重，并下载或复用 MoGe 和 DINOv2 文件。
-4. 对所有必要文件执行固定版本、大小和 SHA-256 校验；缺少 `sam3/sam3.pt` 等任一资源都会停止。
-5. 根据 `offline-assets.sha256` 生成不可变 OSS 版本前缀和精确上传清单；DINOv2 `.git` 等非运行时元数据不会上传。
-6. 使用断点目录上传深圳 OSS，错误报告固定写到 `/root/sam3d-transfer/ossutil-output`，不会污染 Git checkout。
-7. 对清单中的每个远端对象执行精确 CRC64 核对；缺失或不一致的对象会强制重传并再次校验。
-8. 构建一张 `linux/amd64` 统一镜像。
-9. 构建完成后才登录 ACR，避免 Registry 凭证暴露给模型下载或第三方安装步骤。
-10. 根据当前 Git commit 和构建后的镜像摘要自动生成不可变 tag，并用于 ACR 发布。
-11. 推送镜像，失败时自动重试并回读远程摘要确认是否已经成功。
-12. 验证远程 Manifest 只有 `linux/amd64`，且没有 `unknown/unknown` attestation。
-13. 写入不含凭证的部署结果，退出 ACR 登录并清理临时凭证目录。
+3. 根据固定 revision、预期文件路径、大小和 SHA-256 计算确定性的资源配方 ID。
+4. 访问 `sam3d/recipes/<资源配方 ID>/complete.json`；若完成凭据有效且其中每个远端对象的 CRC64 都一致，直接复用对应 OSS 前缀，跳过全部模型下载和上传。
+5. 完成凭据缺失、无效、对象缺失或 CRC64 不一致时，调用 `scripts/prepare_offline_assets.py`，从 ModelScope 下载固定版本的 SAM3 与 SAM3D 主权重，并下载或复用 MoGe 和 DINOv2 文件。
+6. 对所有必要文件执行固定版本、大小和 SHA-256 校验；缺少 `sam3/sam3.pt` 等任一资源都会停止。
+7. 根据 `offline-assets.sha256` 生成不可变 OSS 版本前缀和精确上传清单；DINOv2 `.git` 等非运行时元数据不会上传。
+8. 使用断点目录上传深圳 OSS，错误报告固定写到 `/root/sam3d-transfer/ossutil-output`，不会污染 Git checkout。
+9. 对清单中的每个远端对象执行精确 CRC64 核对；缺失或不一致的对象会强制重传并再次校验，全部成功后才写入完成凭据。
+10. 构建一张 `linux/amd64` 统一镜像。
+11. 构建完成后才登录 ACR，避免 Registry 凭证暴露给模型下载或第三方安装步骤。
+12. 根据当前 Git commit 和构建后的镜像摘要自动生成不可变 tag，并用于 ACR 发布。
+13. 推送镜像，失败时自动重试并回读远程摘要确认是否已经成功。
+14. 验证远程 Manifest 只有 `linux/amd64`，且没有 `unknown/unknown` attestation。
+15. 写入不含凭证的部署结果，退出 ACR 登录并清理临时凭证目录。
 
 固定构建设置由脚本维护，不要求操作人员选择：
 
@@ -140,7 +142,9 @@ FC 本地挂载目录：/mnt/nas/sam3d
 
 ## 重跑与中断
 
-脚本始终在当前终端前台运行。SSH 中断会停止当前进程；重新运行同一个脚本即可复用已完成的模型下载、OSS 断点、CRC64 已匹配的远端对象、Docker 构建缓存和镜像层。OSS 批处理错误报告保存在 `/root/sam3d-transfer/ossutil-output`，不会在仓库内生成 `ossutil_output/`。
+脚本始终在当前终端前台运行。SSH 中断会停止当前进程；重新运行同一个脚本即可复用已完成的模型下载、OSS 断点、CRC64 已匹配的远端对象、Docker 构建缓存和镜像层。只要 OSS 完成凭据和全部对象仍匹配，即使换成没有 `/root/sam3d-transfer` 的全新 ECS，也会跳过模型下载和上传。OSS 批处理错误报告保存在 `/root/sam3d-transfer/ossutil-output`，不会在仓库内生成 `ossutil_output/`。
+
+旧版本脚本已经上传的资源前缀没有完成凭据。第一次使用新版脚本时，如果当前 ECS 仍保留完整的 `/root/sam3d-transfer`，脚本会复用本地文件、核对远端对象并补写凭据，不会重新下载；如果本地文件也不存在，则需要准备一次资源以建立可信凭据。之后的新 ECS 才能走 OSS 快速复用路径。
 
 镜像 tag 由 Git commit 和本地镜像配置摘要自动产生：
 
@@ -170,6 +174,8 @@ cache/torch/hub/facebookresearch_dinov2_main/
 cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth
 ```
 
+`sam3d/recipes/<资源配方 ID>/complete.json` 是发布控制信息，不属于模型挂载目录。它记录资源版本前缀、清单 SHA-256、对象数量及每个对象的 CRC64，并且只在所有资源对象上传和复核成功后写入。
+
 把完成输出中的 OSS Bucket 子目录只读挂载到 `/mnt/nas/sam3d`。脚本只输出挂载参数，不会自动修改 FC。
 
 ## 常见错误
@@ -180,9 +186,11 @@ cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth
 - SAM3 checkpoint 缺失：确认香港 ECS 能访问 `modelscope.cn` 后重新运行脚本；它会复用已有 `hf/` 和 `cache/`，从 ModelScope 只补下载并上传 `sam3/sam3.pt`，然后重建资源清单。
 - MoGe 或 DINOv2 权重下载失败：确认香港 ECS 能访问 `hf-mirror.com`；这些公开文件不需要 Token。
 - OSS 访问失败：Bucket 必须在深圳；香港 ECS 上传使用公网 Endpoint，并确保 RAM 身份有目标 Bucket 的列举和写入权限。
+- OSS 完成凭据缺失或 CRC64 不匹配：这是安全回退，不会直接使用不完整资源；脚本会检查或准备本地资源、修复远端对象，并在最后重写完成凭据。
 - OSS 上传中断：直接重跑，`/root/sam3d-transfer/oss-upload-checkpoints` 会继续断点上传；错误明细在 `/root/sam3d-transfer/ossutil-output`。
 - ACR 地址格式错误：使用完整公网 `域名/namespace/repository`，不要添加协议或 tag。
 - Docker 安装失败：检查系统是否混装 Ubuntu `docker.io` 与 Docker CE。
+- Docker 基础镜像元数据超时：基础镜像已固定通过 `docker.1ms.run` 拉取，不再直连 `registry-1.docker.io`；确认 ECS 能访问该域名后直接重跑。
 - CUDA 扩展编译失败：保留首次失败日志；修复网络或资源问题后直接重跑，Buildx 会复用已完成层。
 - ACR 登录失败：使用容器镜像服务控制台提供的固定密码，不是阿里云控制台登录密码。
 - Manifest 校验失败：远程镜像必须且只能包含 `linux/amd64`。

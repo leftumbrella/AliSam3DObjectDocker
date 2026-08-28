@@ -16,6 +16,8 @@ readonly OSS_PUBLIC_ENDPOINT='https://oss-cn-shenzhen.aliyuncs.com'
 readonly OSSUTIL_VERSION='2.3.0'
 readonly OSSUTIL_SHA256='3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a'
 readonly TRANSFER_ROOT_DEFAULT='/root/sam3d-transfer'
+readonly ASSET_RECEIPT_SCHEMA='1'
+readonly ASSET_RECEIPT_ROOT='sam3d/recipes'
 readonly SAM3D_REF='f91db411c50efee93d8db7aeb323885650f6f722'
 readonly SAM3_REF='8f0b7f4d4e7eda2ed606ebde6702c93359ad01da'
 readonly TORCH_CUDA_ARCH_LIST_VALUE='8.9;9.0'
@@ -30,6 +32,7 @@ ACR_HOST=''
 OSSUTIL_BIN=''
 TOOLS_PYTHON=''
 OSS_UPLOAD_LIST=''
+OSS_RECEIPT_INVENTORY=''
 GIT_COMMIT=''
 GIT_COMMIT_SHORT=''
 IMAGE_TAG=''
@@ -38,6 +41,8 @@ REMOTE_IMAGE=''
 LOCAL_CONFIG_DIGEST=''
 BUILD_METADATA_FILE=''
 ASSET_RELEASE=''
+ASSET_RECIPE_ID=''
+ASSET_RECEIPT_KEY=''
 OSS_PREFIX=''
 DEPLOYMENT_RESULT_FILE=''
 CURRENT_STEP='启动'
@@ -318,6 +323,32 @@ ensure_tool_venv() {
   export PATH="$tools_root/bin:$PATH"
 }
 
+run_asset_tool() {
+  env \
+    -u OSS_ACCESS_KEY_ID \
+    -u OSS_ACCESS_KEY_SECRET \
+    -u OSS_SESSION_TOKEN \
+    -u OSS_REGION \
+    -u OSS_ENDPOINT \
+    "$TOOLS_PYTHON" "$@"
+}
+
+ensure_transfer_root() {
+  mkdir -p -- "$TRANSFER_ROOT"
+  [[ ! -L "$TRANSFER_ROOT" ]] || die '离线资源目录不得是符号链接'
+  chmod 700 "$TRANSFER_ROOT"
+  DEPLOYMENT_RESULT_FILE="$TRANSFER_ROOT/deployment-result.env"
+}
+
+resolve_asset_recipe() {
+  CURRENT_STEP='计算离线资源配方 ID'
+  local prepare_script="$PROJECT_ROOT/scripts/prepare_offline_assets.py"
+  ASSET_RECIPE_ID="$(run_asset_tool "$prepare_script" --print-recipe-id)"
+  [[ "$ASSET_RECIPE_ID" =~ ^[0-9a-f]{64}$ ]] \
+    || die '离线资源配方 ID 格式无效'
+  ASSET_RECEIPT_KEY="${ASSET_RECEIPT_ROOT}/${ASSET_RECIPE_ID}/complete.json"
+}
+
 ossutil_is_compatible() {
   local candidate=$1
   local version_output cp_help_output hash_help_output
@@ -375,17 +406,15 @@ prepare_offline_assets() {
   local prepare_script="$PROJECT_ROOT/scripts/prepare_offline_assets.py"
   local -a args
 
-  mkdir -p -- "$TRANSFER_ROOT"
-  [[ ! -L "$TRANSFER_ROOT" ]] || die '离线资源目录不得是符号链接'
-  chmod 700 "$TRANSFER_ROOT"
+  ensure_transfer_root
 
-  if "$TOOLS_PYTHON" "$prepare_script" \
+  if run_asset_tool "$prepare_script" \
     --verify-only \
     --transfer-root "$TRANSFER_ROOT" >/dev/null 2>&1; then
     log '现有离线资源完整，跳过下载'
   else
     args=(--transfer-root "$TRANSFER_ROOT")
-    if "$TOOLS_PYTHON" "$prepare_script" \
+    if run_asset_tool "$prepare_script" \
       --verify-main-only \
       --transfer-root "$TRANSFER_ROOT" >/dev/null 2>&1; then
       log '现有 SAM3D 主 checkpoint 完整，补齐其他离线资源'
@@ -393,7 +422,7 @@ prepare_offline_assets() {
       args+=(--download-sam3d)
       log 'SAM3D 主 checkpoint 缺失，将从 ModelScope 下载公开权重'
     fi
-    if "$TOOLS_PYTHON" "$prepare_script" \
+    if run_asset_tool "$prepare_script" \
       --verify-sam3-only \
       --transfer-root "$TRANSFER_ROOT" >/dev/null 2>&1; then
       log '现有 SAM3 checkpoint 完整，复用现有文件'
@@ -401,10 +430,10 @@ prepare_offline_assets() {
       args+=(--download-sam3)
       log 'SAM3 checkpoint 缺失，将从 ModelScope 下载公开权重'
     fi
-    "$TOOLS_PYTHON" "$prepare_script" "${args[@]}"
+    run_asset_tool "$prepare_script" "${args[@]}"
   fi
 
-  "$TOOLS_PYTHON" "$prepare_script" \
+  run_asset_tool "$prepare_script" \
     --verify-only \
     --transfer-root "$TRANSFER_ROOT"
   local manifest="$TRANSFER_ROOT/storage/offline-assets.sha256"
@@ -413,7 +442,6 @@ prepare_offline_assets() {
   [[ "$digest" =~ ^[0-9a-f]{12}$ ]] || die '无法计算离线资源清单哈希'
   ASSET_RELEASE="bundle-${digest}"
   OSS_PREFIX="sam3d/releases/${ASSET_RELEASE}"
-  DEPLOYMENT_RESULT_FILE="$TRANSFER_ROOT/deployment-result.env"
 }
 
 prompt_oss_credentials() {
@@ -459,6 +487,114 @@ ensure_oss_access() {
     || die 'OSS 访问失败，请核对 Bucket 名、深圳地域和 RAM 权限'
 }
 
+clear_oss_environment() {
+  unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
+  unset OSS_REGION OSS_ENDPOINT
+}
+
+validate_asset_receipt_file() {
+  local receipt=$1
+  jq -e \
+    --argjson schema "$ASSET_RECEIPT_SCHEMA" \
+    --arg recipe_id "$ASSET_RECIPE_ID" \
+    '
+      def safe_key:
+        type == "string"
+        and length > 0
+        and (startswith("/") | not)
+        and (test("(^|/)\\.\\.(/|$)") | not)
+        and (test("[[:cntrl:]]") | not);
+      type == "object"
+      and .schema == $schema
+      and .recipe_id == $recipe_id
+      and ((.manifest_sha256 | type) == "string")
+      and (.manifest_sha256 | test("^[0-9a-f]{64}$"))
+      and ((.asset_release | type) == "string")
+      and .asset_release == ("bundle-" + .manifest_sha256[0:12])
+      and ((.objects | type) == "array")
+      and (.objects | length) > 0
+      and ((.object_count | type) == "number")
+      and .object_count == (.objects | length)
+      and ([.objects[].key] | unique | length) == .object_count
+      and any(.objects[]; .key == "offline-assets.sha256")
+      and all(
+        .objects[];
+        ((.crc64 | type) == "string")
+        and (.crc64 | test("^[0-9]+$"))
+        and (.key | safe_key)
+      )
+    ' "$receipt" >/dev/null 2>&1
+}
+
+reuse_remote_offline_assets() {
+  CURRENT_STEP='核对 OSS 离线资源完成凭据'
+  ensure_temp_dir
+  local receipt_file="$TEMP_DIR/asset-receipt-${ASSET_RECIPE_ID}.json"
+  local output_dir="$TEMP_DIR/oss-receipt-output"
+  local receipt_url="oss://${OSS_BUCKET}/${ASSET_RECEIPT_KEY}"
+  local lookup_output='' lower_output asset_release expected_count
+  local expected_crc64 encoded_key extra key remote_crc64 count=0
+
+  install -m 0700 -d "$output_dir"
+  rm -f -- "$receipt_file"
+  if ! lookup_output="$(
+    "$OSSUTIL_BIN" cp -f \
+      "$receipt_url" \
+      "$receipt_file" \
+      --output-dir "$output_dir" 2>&1
+  )"; then
+    lower_output=${lookup_output,,}
+    case "$lower_output" in
+      *nosuchkey*|*statuscode=404*|*'status code: 404'*|*'not found'*)
+        log 'OSS 尚无当前资源配方的完成凭据，将执行本地准备'
+        return 1
+        ;;
+      *)
+        die "读取 OSS 资源完成凭据失败：$receipt_url"
+        ;;
+    esac
+  fi
+
+  if [[ ! -f "$receipt_file" || -L "$receipt_file" ]] \
+    || ! validate_asset_receipt_file "$receipt_file"; then
+    warn 'OSS 资源完成凭据格式或配方不匹配，将重新准备并修复'
+    return 1
+  fi
+
+  asset_release="$(jq -r '.asset_release' "$receipt_file")"
+  expected_count="$(jq -r '.object_count' "$receipt_file")"
+  while IFS=$'\t' read -r expected_crc64 encoded_key extra; do
+    [[ -n "$expected_crc64" && -n "$encoded_key" && -z "$extra" ]] \
+      || die 'OSS 资源完成凭据的对象记录无效'
+    key="$(printf '%s' "$encoded_key" | base64 --decode)" \
+      || die 'OSS 资源完成凭据的对象路径无法解码'
+    case "$key" in
+      ''|/*|../*|*/../*|*/..)
+        die "OSS 资源完成凭据包含不安全路径：$key"
+        ;;
+    esac
+    if ! remote_crc64="$(
+      oss_crc64 "oss://${OSS_BUCKET}/sam3d/releases/${asset_release}/${key}"
+    )"; then
+      warn "OSS 完成资源缺少对象，将重新准备：$key"
+      return 1
+    fi
+    if [[ "$remote_crc64" != "$expected_crc64" ]]; then
+      warn "OSS 完成资源 CRC64 不匹配，将重新准备：$key"
+      return 1
+    fi
+    ((count += 1))
+  done < <(
+    jq -r '.objects[] | [.crc64, (.key | @base64)] | @tsv' "$receipt_file"
+  )
+
+  [[ "$count" -eq "$expected_count" ]] \
+    || die "OSS 资源完成凭据对象数量不匹配：${count}/${expected_count}"
+  ASSET_RELEASE=$asset_release
+  OSS_PREFIX="sam3d/releases/${ASSET_RELEASE}"
+  log "OSS 已存在完全相同的 ${count} 个资源对象，跳过模型下载和上传：oss://${OSS_BUCKET}/${OSS_PREFIX}/"
+}
+
 write_oss_upload_list() {
   local manifest="$TRANSFER_ROOT/storage/offline-assets.sha256"
   local line key temporary_list
@@ -475,6 +611,8 @@ write_oss_upload_list() {
     case "$key" in
       /*|../*|*/../*|*/..) die "离线资源清单包含不安全路径：$key" ;;
     esac
+    [[ ! "$key" =~ [[:cntrl:]] ]] \
+      || die "离线资源清单包含控制字符：$key"
     [[ -f "$TRANSFER_ROOT/storage/$key" && ! -L "$TRANSFER_ROOT/storage/$key" ]] \
       || die "离线资源清单对象不是普通文件：$key"
     printf '%s\n' "$key" >>"$temporary_list"
@@ -505,23 +643,28 @@ verify_or_repair_remote_oss_object() {
   local url="oss://${OSS_BUCKET}/${OSS_PREFIX}/${key}"
   local local_crc64 remote_crc64=''
 
+  [[ -n "$OSS_RECEIPT_INVENTORY" ]] \
+    || die 'OSS 资源凭据清单路径未初始化'
+  [[ ! "$key" =~ [[:cntrl:]] ]] \
+    || die "OSS 资源对象路径包含控制字符：$key"
   local_crc64="$(oss_crc64 "$source")" \
     || die "无法计算本地资源 CRC64：$source"
   if remote_crc64="$(oss_crc64 "$url")" \
     && [[ "$remote_crc64" == "$local_crc64" ]]; then
-    return
+    :
+  else
+    warn "OSS 对象缺失或 CRC64 不一致，将强制修复：$url"
+    "$OSSUTIL_BIN" cp -f \
+      "$source" \
+      "$url" \
+      --checkpoint-dir "$checkpoint_dir" \
+      --output-dir "$output_dir"
+    remote_crc64="$(oss_crc64 "$url")" \
+      || die "修复后仍无法读取 OSS 对象 CRC64：$url"
+    [[ "$remote_crc64" == "$local_crc64" ]] \
+      || die "修复后 OSS 对象 CRC64 仍与本地不一致：$url"
   fi
-
-  warn "OSS 对象缺失或 CRC64 不一致，将强制修复：$url"
-  "$OSSUTIL_BIN" cp -f \
-    "$source" \
-    "$url" \
-    --checkpoint-dir "$checkpoint_dir" \
-    --output-dir "$output_dir"
-  remote_crc64="$(oss_crc64 "$url")" \
-    || die "修复后仍无法读取 OSS 对象 CRC64：$url"
-  [[ "$remote_crc64" == "$local_crc64" ]] \
-    || die "修复后 OSS 对象 CRC64 仍与本地不一致：$url"
+  printf '%s\t%s\n' "$local_crc64" "$key" >>"$OSS_RECEIPT_INVENTORY"
 }
 
 verify_remote_oss_inventory() {
@@ -546,14 +689,76 @@ verify_remote_oss_inventory() {
   log "OSS 已逐项核对 ${count} 个模型资源对象和校验清单的 CRC64：oss://${OSS_BUCKET}/${OSS_PREFIX}/"
 }
 
+publish_asset_receipt() {
+  local checkpoint_dir=$1
+  local output_dir=$2
+  local manifest="$TRANSFER_ROOT/storage/offline-assets.sha256"
+  local receipt_file="$TEMP_DIR/asset-receipt-${ASSET_RECIPE_ID}.json"
+  local receipt_url="oss://${OSS_BUCKET}/${ASSET_RECEIPT_KEY}"
+  local manifest_sha256 object_count local_crc64 remote_crc64
+
+  [[ "$ASSET_RECIPE_ID" =~ ^[0-9a-f]{64}$ ]] \
+    || die '无法发布未设置资源配方 ID 的 OSS 完成凭据'
+  [[ "$ASSET_RECEIPT_KEY" == "${ASSET_RECEIPT_ROOT}/${ASSET_RECIPE_ID}/complete.json" ]] \
+    || die 'OSS 资源完成凭据路径与配方 ID 不匹配'
+  [[ -s "$OSS_RECEIPT_INVENTORY" && ! -L "$OSS_RECEIPT_INVENTORY" ]] \
+    || die 'OSS 资源完成凭据对象清单为空或不安全'
+
+  manifest_sha256="$(sha256sum "$manifest" | awk '{print $1}')"
+  [[ "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]] \
+    || die '无法计算离线资源清单 SHA-256'
+  [[ "$ASSET_RELEASE" == "bundle-${manifest_sha256:0:12}" ]] \
+    || die '离线资源发布前缀与清单 SHA-256 不匹配'
+  object_count="$(wc -l <"$OSS_RECEIPT_INVENTORY" | tr -d '[:space:]')"
+  [[ "$object_count" =~ ^[1-9][0-9]*$ ]] \
+    || die '无法计算 OSS 资源完成凭据对象数量'
+
+  jq -Rn \
+    --argjson schema "$ASSET_RECEIPT_SCHEMA" \
+    --arg recipe_id "$ASSET_RECIPE_ID" \
+    --arg asset_release "$ASSET_RELEASE" \
+    --arg manifest_sha256 "$manifest_sha256" \
+    '
+      [inputs | split("\t") | {crc64: .[0], key: .[1]}] as $objects
+      | {
+          schema: $schema,
+          recipe_id: $recipe_id,
+          asset_release: $asset_release,
+          manifest_sha256: $manifest_sha256,
+          object_count: ($objects | length),
+          objects: $objects
+        }
+    ' <"$OSS_RECEIPT_INVENTORY" >"$receipt_file" \
+    || die '生成 OSS 资源完成凭据失败'
+  validate_asset_receipt_file "$receipt_file" \
+    || die '生成的 OSS 资源完成凭据未通过格式校验'
+
+  "$OSSUTIL_BIN" cp -f \
+    "$receipt_file" \
+    "$receipt_url" \
+    --checkpoint-dir "$checkpoint_dir" \
+    --output-dir "$output_dir"
+  local_crc64="$(oss_crc64 "$receipt_file")" \
+    || die '无法计算本地 OSS 资源完成凭据 CRC64'
+  remote_crc64="$(oss_crc64 "$receipt_url")" \
+    || die '无法读取远程 OSS 资源完成凭据 CRC64'
+  [[ "$remote_crc64" == "$local_crc64" ]] \
+    || die '远程 OSS 资源完成凭据 CRC64 与本地不一致'
+  log "OSS 资源完成凭据已写入：$receipt_url"
+}
+
 upload_offline_assets() {
   CURRENT_STEP='断点上传完整离线资源到深圳 OSS'
   local checkpoint_dir="$TRANSFER_ROOT/oss-upload-checkpoints"
   local output_dir="$TRANSFER_ROOT/ossutil-output"
+  ensure_temp_dir
   mkdir -p -- "$checkpoint_dir"
   mkdir -p -- "$output_dir"
   chmod 700 "$checkpoint_dir"
   chmod 700 "$output_dir"
+  OSS_RECEIPT_INVENTORY="$TEMP_DIR/asset-receipt-inventory-${ASSET_RECIPE_ID}.tsv"
+  : >"$OSS_RECEIPT_INVENTORY"
+  chmod 600 "$OSS_RECEIPT_INVENTORY"
   write_oss_upload_list
 
   "$OSSUTIL_BIN" cp -u -r \
@@ -564,7 +769,8 @@ upload_offline_assets() {
     --output-dir "$output_dir"
 
   verify_remote_oss_inventory "$checkpoint_dir" "$output_dir"
-  unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN OSS_REGION OSS_ENDPOINT
+  publish_asset_receipt "$checkpoint_dir" "$output_dir"
+  clear_oss_environment
 }
 
 login_acr() {
@@ -745,8 +951,8 @@ print_plan() {
   本地镜像：     $LOCAL_IMAGE
   目标仓库：     $ACR_IMAGE
 
-脚本会下载或复用并校验 SAM3、SAM3D、MoGe 和 DINOv2 离线资源，
-把完整资源包断点上传到新的内容寻址 OSS 前缀，再构建并推送 linux/amd64 统一镜像。
+脚本会先按资源配方完成凭据核对 OSS；已存在完全相同的资源包时跳过下载和上传。
+仅在凭据缺失或 CRC64 不一致时，才准备 SAM3、SAM3D、MoGe 和 DINOv2 并修复 OSS，然后构建并推送 linux/amd64 统一镜像。
 不会创建或修改 FC，也不会启动 GPU。
 EOF
 }
@@ -778,9 +984,15 @@ main() {
   ensure_docker
   ensure_tool_venv
   ensure_ossutil
-  prepare_offline_assets
+  ensure_transfer_root
+  resolve_asset_recipe
   ensure_oss_access
-  upload_offline_assets
+  if reuse_remote_offline_assets; then
+    clear_oss_environment
+  else
+    prepare_offline_assets
+    upload_offline_assets
+  fi
   build_image
   login_acr
   push_image
