@@ -279,6 +279,40 @@ class OfflineAssetPreparationTests(unittest.TestCase):
             )
             self.assertNotIn("huggingface.co", offline_assets.SAM3_MODELSCOPE_URL)
 
+    def test_sam3d_download_uses_pinned_modelscope_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            download_root = Path(directory)
+            checkpoint_root = download_root / "checkpoints"
+            with mock.patch.object(offline_assets, "download_known_file") as download:
+                result = offline_assets.download_sam3d_checkpoint(download_root)
+
+            self.assertEqual(result, checkpoint_root)
+            expected_calls = [
+                mock.call(
+                    checkpoint_root / filename,
+                    url=f"{offline_assets.SAM3D_MODELSCOPE_BASE_URL}/{filename}",
+                    expected_size=expected_size,
+                    expected_sha256=expected_sha256,
+                    label=f"SAM 3D Objects {filename} from ModelScope",
+                )
+                for filename, (expected_size, expected_sha256) in (
+                    offline_assets.SAM3D_MODELSCOPE_FILES.items()
+                )
+            ]
+            self.assertEqual(download.call_args_list, expected_calls)
+            self.assertIn(
+                offline_assets.SAM3D_MODELSCOPE_REVISION,
+                offline_assets.SAM3D_MODELSCOPE_BASE_URL,
+            )
+            self.assertIn(
+                "modelscope.cn/models/facebook/sam-3d-objects/resolve/",
+                offline_assets.SAM3D_MODELSCOPE_BASE_URL,
+            )
+            self.assertNotIn(
+                "huggingface.co",
+                offline_assets.SAM3D_MODELSCOPE_BASE_URL,
+            )
+
     def test_sam3_checkpoint_rejects_truncation_and_destination_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -374,9 +408,16 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         self.assertIn("HF_HUB_OFFLINE=1", readme)
         self.assertIn("HF_HUB_OFFLINE=1", env_example)
         self.assertNotIn("hf auth login", preparer)
-        self.assertIn("HF_TOKEN", preparer)
+        self.assertNotIn("HF_TOKEN", preparer)
         self.assertNotIn("use scripts/deploy_from_hk.sh", preparer)
-        self.assertIn("install the Hugging Face CLI", preparer)
+        self.assertIn(
+            "modelscope.cn/models/facebook/sam-3d-objects/resolve/",
+            preparer,
+        )
+        self.assertIn(
+            "https://modelscope.cn/models/facebook/sam-3d-objects",
+            readme,
+        )
 
 
 if __name__ == "__main__":

@@ -18,12 +18,13 @@
 
 构建过程不需要 GPU。CUDA 扩展会在 CUDA devel 构建镜像内编译。
 
-### 模型权限与深圳 OSS
+### 模型来源与深圳 OSS
 
-1. 在 Hugging Face 上获得 `facebook/sam-3d-objects` 的读取权限，并准备可读取它的 Access Token。只有 SAM3D 主权重缺失时脚本才会隐藏读取该 Token。
-2. SAM3 从魔塔社区（ModelScope）的公开模型 [facebook/sam3](https://modelscope.cn/models/facebook/sam3) 下载，不需要 Hugging Face Token。
-3. 提前创建深圳地域 OSS Bucket，并准备对目标 Bucket 有读取、列举和上传权限的 ECS RAM Role、ossutil 配置或临时 RAM/STS 凭证。
-4. 香港 ECS 跨地域上传固定使用公网 Endpoint：
+1. SAM3D 主权重从魔搭社区（ModelScope）的公开模型 [facebook/sam-3d-objects](https://modelscope.cn/models/facebook/sam-3d-objects) 下载。
+2. SAM3 从魔搭社区的公开模型 [facebook/sam3](https://modelscope.cn/models/facebook/sam3) 下载。两套主权重都不需要 Hugging Face Token。
+3. MoGe 权重仍从 Hugging Face 的公开直链下载，不需要登录或 Token。
+4. 提前创建深圳地域 OSS Bucket，并准备对目标 Bucket 有读取、列举和上传权限的 ECS RAM Role、ossutil 配置或临时 RAM/STS 凭证。
+5. 香港 ECS 跨地域上传固定使用公网 Endpoint：
 
    ```text
    https://oss-cn-shenzhen.aliyuncs.com
@@ -87,23 +88,22 @@ ACR 完整公网仓库地址（不含协议和 tag）:
 ACR 登录用户名:
 ```
 
-SAM3D 主权重缺失时，脚本会隐藏读取 Hugging Face Token；只缺 SAM3 时会直接从 ModelScope 下载，不会索取该 Token。如果现有 ossutil 配置、环境凭证和 ECS RAM Role 都无法访问 Bucket，才会继续读取临时 OSS 凭证。镜像构建完成后再隐藏读取 ACR 密码：
+SAM3D 或 SAM3 主权重缺失时，脚本会直接从 ModelScope 下载，不会读取 Hugging Face Token。如果现有 ossutil 配置、环境凭证和 ECS RAM Role 都无法访问 Bucket，才会继续读取临时 OSS 凭证。镜像构建完成后再隐藏读取 ACR 密码：
 
 ```text
-Hugging Face Access Token（输入时不会显示）:
 OSS AccessKey ID:
 OSS AccessKey Secret:
 OSS STS Token（普通 RAM AccessKey 直接回车）:
 ACR Registry 密码:
 ```
 
-Token、Secret、STS Token 和 Registry 密码不会出现在命令行参数、Git 或最终结果文件中；脚本退出时会清理进程环境和临时 Docker 凭证目录。
+AccessKey Secret、STS Token 和 Registry 密码不会出现在命令行参数、Git 或最终结果文件中；脚本退出时会清理进程环境和临时 Docker 凭证目录。
 
 输入完成后，脚本自动连续执行：
 
 1. 检查 Ubuntu、CPU 架构、磁盘、内存和干净的 Git checkout。
-2. 安装或复用 Docker CE、Buildx、Hugging Face CLI 和校验过的 ossutil 2.3.0。
-3. 调用 `scripts/prepare_offline_assets.py`，SAM3 从 ModelScope 下载，SAM3D 主权重从 Hugging Face 下载，并下载或复用 MoGe 和 DINOv2 文件。
+2. 安装或复用 Docker CE、Buildx、隔离的 Python 工具环境和校验过的 ossutil 2.3.0。
+3. 调用 `scripts/prepare_offline_assets.py`，从 ModelScope 下载固定版本的 SAM3 与 SAM3D 主权重，并下载或复用 MoGe 和 DINOv2 文件。
 4. 对所有必要文件执行固定版本、大小和 SHA-256 校验；缺少 `sam3/sam3.pt` 等任一资源都会停止。
 5. 根据 `offline-assets.sha256` 生成不可变 OSS 版本前缀和精确上传清单；DINOv2 `.git` 等非运行时元数据不会上传。
 6. 使用断点目录上传深圳 OSS，错误报告固定写到 `/root/sam3d-transfer/ossutil-output`，不会污染 Git checkout。
@@ -176,8 +176,9 @@ cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth
 
 - “脚本不接受任何参数”：不要添加 `--help`、地址、用户名或其他参数，直接运行脚本并按提示输入。
 - “Git checkout 不是干净状态”：检查 `git status --short`，不要在不清楚文件来源时强制删除。
-- Hugging Face 权限失败：确认已经接受 `facebook/sam-3d-objects` 的许可，且 Token 能读取该模型。
+- SAM3D checkpoint 缺失：确认香港 ECS 能访问 [facebook/sam-3d-objects](https://modelscope.cn/models/facebook/sam-3d-objects) 后重新运行；脚本会按固定 revision 断点下载并逐文件校验 SHA-256。
 - SAM3 checkpoint 缺失：确认香港 ECS 能访问 `modelscope.cn` 后重新运行脚本；它会复用已有 `hf/` 和 `cache/`，从 ModelScope 只补下载并上传 `sam3/sam3.pt`，然后重建资源清单。
+- MoGe 下载失败：确认香港 ECS 能访问 Hugging Face 公网；该公开文件不需要 Token。
 - OSS 访问失败：Bucket 必须在深圳；香港 ECS 上传使用公网 Endpoint，并确保 RAM 身份有目标 Bucket 的列举和写入权限。
 - OSS 上传中断：直接重跑，`/root/sam3d-transfer/oss-upload-checkpoints` 会继续断点上传；错误明细在 `/root/sam3d-transfer/ossutil-output`。
 - ACR 地址格式错误：使用完整公网 `域名/namespace/repository`，不要添加协议或 tag。

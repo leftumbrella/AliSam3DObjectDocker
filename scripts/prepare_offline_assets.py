@@ -18,7 +18,67 @@ import tempfile
 
 
 SAM3D_REPOSITORY = "facebook/sam-3d-objects"
-SAM3D_REVISION = "2e73555018d2741ccd486e56c24fac41155a1dc6"
+# Pinned to the public ModelScope mirror:
+# https://modelscope.cn/models/facebook/sam-3d-objects/resolve/64ec50f24a12eb631aceff750993d162d751dc25/checkpoints
+SAM3D_MODELSCOPE_REVISION = "64ec50f24a12eb631aceff750993d162d751dc25"
+SAM3D_MODELSCOPE_BASE_URL = (
+    f"https://modelscope.cn/models/{SAM3D_REPOSITORY}/resolve/"
+    f"{SAM3D_MODELSCOPE_REVISION}/checkpoints"
+)
+SAM3D_MODELSCOPE_FILES = {
+    "pipeline.yaml": (
+        3_548,
+        "53c3d226b21df85c0bb3d16e6e4fa63abde0d6167525765eb929d02bfa9d358c",
+    ),
+    "ss_generator.yaml": (
+        5_076,
+        "3c265448bca7c057f94e3ef56adea3a895a10bcd9f15f992a41dd03fa35412cd",
+    ),
+    "ss_generator.ckpt": (
+        6_690_136_964,
+        "225f40479e4cff4f39d6fa14c55be3abad1475bf55b61af3bec1e19ed2f6c146",
+    ),
+    "slat_generator.yaml": (
+        1_986,
+        "53029fadff6fe34a0344381a16d64d65d0567d603484952712e8969319559c4e",
+    ),
+    "slat_generator.ckpt": (
+        4_906_537_684,
+        "91529bde8e7daa12d09618a66c319e3a5a6398db6b23b958cedcb1c3f28faabb",
+    ),
+    "ss_decoder.yaml": (
+        244,
+        "baacff269b664f84f7aa1896ebd66128065f6568cdb88d419d5c3d2ccb4193ae",
+    ),
+    "ss_decoder.ckpt": (
+        147_609_242,
+        "6dac1cd7b7fda5a38e0614fadae441f1794f80e39ea2981f1ac8aff0a7e99340",
+    ),
+    "slat_decoder_gs.yaml": (
+        576,
+        "53f054e02a0c185f0a6885d30bb6ca0ec92efe0a98148688e7f05f7c26afe670",
+    ),
+    "slat_decoder_gs.ckpt": (
+        171_476_155,
+        "f8077c36a06eaf890dd93cda1937411f793dea1eb80b3dd9329f2038ba84a111",
+    ),
+    "slat_decoder_gs_4.yaml": (
+        575,
+        "3d1dfd4c56cdac56f30e0cf5eb310d4df973fe25c60ac0a462c86ca4e3bf8b48",
+    ),
+    "slat_decoder_gs_4.ckpt": (
+        170_269_801,
+        "731a0eceaa47945b52aa27f650d695b2aea9cc70945751e5609e5cb5b49f0186",
+    ),
+    "slat_decoder_mesh.yaml": (
+        300,
+        "8f46952764aa985c50109a56f0b4f07625cdb06457aaded74957d26f3520c69e",
+    ),
+    "slat_decoder_mesh.ckpt": (
+        363_726_862,
+        "85907b37b67d8ce5b099a96629bdcfbd873eb407dee6b3aa9a75deb15038db33",
+    ),
+}
 SAM3_REPOSITORY = "facebook/sam3"
 # Pinned to the public ModelScope mirror:
 # https://modelscope.cn/models/facebook/sam3/resolve/96f3e1b404ba14f2cfac60ee6ae87c269a7b7923/sam3.pt
@@ -281,7 +341,8 @@ def checkpoint_inventory(pipeline: Path) -> dict[str, Path]:
         if expected is not None and configured.name != expected[0]:
             raise AssetError(
                 f"checkpoint filename for {key} does not match pinned revision "
-                f"{SAM3D_REVISION}: expected {expected[0]}, got {configured.name}"
+                f"{SAM3D_MODELSCOPE_REVISION}: expected {expected[0]}, "
+                f"got {configured.name}"
             )
         inventory[key] = resolved
     return inventory
@@ -413,29 +474,16 @@ def copy_checkpoint_tree(source: Path, destination: Path) -> None:
 
 
 def download_sam3d_checkpoint(download_root: Path) -> Path:
-    if shutil.which("hf") is None:
-        raise AssetError(
-            "Hugging Face CLI 'hf' and HF_TOKEN are required; "
-            "install the Hugging Face CLI and provide HF_TOKEN in the environment"
+    checkpoint_root = download_root / "checkpoints"
+    for filename, (expected_size, expected_sha256) in SAM3D_MODELSCOPE_FILES.items():
+        download_known_file(
+            checkpoint_root / filename,
+            url=f"{SAM3D_MODELSCOPE_BASE_URL}/{filename}",
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+            label=f"SAM 3D Objects {filename} from ModelScope",
         )
-    download_root.mkdir(parents=True, exist_ok=True)
-    run(
-        [
-            "hf",
-            "download",
-            "--repo-type",
-            "model",
-            "--revision",
-            SAM3D_REVISION,
-            "--local-dir",
-            str(download_root),
-            "--max-workers",
-            "1",
-            SAM3D_REPOSITORY,
-        ],
-        label=f"download gated checkpoint {SAM3D_REPOSITORY}",
-    )
-    return download_root / "checkpoints"
+    return checkpoint_root
 
 
 def verify_sam3_checkpoint(path: Path) -> None:
@@ -675,7 +723,8 @@ def prepare(args: argparse.Namespace) -> None:
         copy_checkpoint_tree(source, checkpoint_destination)
     elif not (checkpoint_destination / "pipeline.yaml").is_file():
         raise AssetError(
-            "pipeline.yaml is unavailable; use --download-sam3d with HF_TOKEN, "
+            "pipeline.yaml is unavailable; use --download-sam3d to download "
+            "it from ModelScope, "
             "or pass --sam3d-source /path/to/checkpoints"
         )
 
@@ -776,7 +825,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--download-sam3d",
         action="store_true",
-        help="download the gated main checkpoint with the logged-in hf CLI",
+        help="download the pinned SAM 3D Objects checkpoint from ModelScope",
     )
     parser.add_argument(
         "--sam3-source",

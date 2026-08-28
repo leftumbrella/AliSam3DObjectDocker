@@ -88,7 +88,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 ./scripts/deploy_from_hk.sh
 ```
 
-运行时输入深圳 OSS Bucket、ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码。只有 SAM3D 主权重缺失时才会隐藏读取 Hugging Face Token；SAM3 从魔塔社区（ModelScope）公开模型下载，不需要该 Token。现有 OSS 身份不可用时才读取临时 RAM/STS 凭证。SAM3、SAM3D、MoGe、DINOv2 下载与校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、镜像构建、推送重试和 Manifest 校验均自动完成。
+运行时输入深圳 OSS Bucket、ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码。SAM3 与 SAM3D 主权重均从魔搭社区（ModelScope）公开模型下载，不再需要 Hugging Face Token。现有 OSS 身份不可用时才读取临时 RAM/STS 凭证。SAM3、SAM3D、MoGe、DINOv2 下载与校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、镜像构建、推送重试和 Manifest 校验均自动完成。
 
 脚本不会创建或修改 FC，也不会启动 GPU。完成输出会给出 ACR 镜像、OSS Bucket 子目录以及固定的容器挂载目录 `/mnt/nas/sam3d`。
 
@@ -215,3 +215,4 @@ curl -fS -X POST "$FC_URL/generate" \
 - [阿里云 FC PutConcurrencyConfig](https://help.aliyun.com/zh/functioncompute/fc/developer-reference/api-fc-2023-03-30-putconcurrencyconfig)
 - [PyTorch CUDA 内存管理](https://docs.pytorch.org/docs/stable/notes/cuda.html#memory-management)
 - [SAM 3D Objects 官方安装与显存前提](https://github.com/facebookresearch/sam-3d-objects/blob/main/doc/setup.md)
+- [SAM 3D Objects 魔搭社区模型](https://modelscope.cn/models/facebook/sam-3d-objects)

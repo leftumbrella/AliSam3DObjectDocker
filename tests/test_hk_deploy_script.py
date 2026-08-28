@@ -63,7 +63,8 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn("ACR 完整公网仓库地址", self.script)
         self.assertIn("ACR 登录用户名", self.script)
         self.assertIn("ACR Registry 密码", self.script)
-        self.assertIn("Hugging Face Access Token", self.script)
+        self.assertNotIn("Hugging Face Access Token", self.script)
+        self.assertNotIn("HF_TOKEN", self.script)
         self.assertIn("OSS AccessKey Secret", self.script)
         self.assertIn("read -r -s", self.script)
         self.assertNotIn("确认执行", self.script)
@@ -125,14 +126,18 @@ class HongKongDeployScriptTests(unittest.TestCase):
         positions = [main_block.index(step) for step in ordered_steps]
         self.assertEqual(positions, sorted(positions))
 
-    def test_huggingface_access_is_only_required_for_sam3d(self) -> None:
-        access_block = self.script.split("ensure_huggingface_access() {", 1)[1].split(
-            "\n}\n\nprepare_offline_assets() {",
-            1,
-        )[0]
-        self.assertIn("facebook/sam-3d-objects", access_block)
-        self.assertNotIn("facebook/sam3", access_block)
-        self.assertEqual(self.script.count("needs_huggingface=1"), 1)
+    def test_both_main_checkpoints_use_modelscope_without_hf_token(self) -> None:
+        self.assertIn(
+            "SAM3D 主 checkpoint 缺失，将从 ModelScope 下载公开权重",
+            self.script,
+        )
+        self.assertIn(
+            "SAM3 checkpoint 缺失，将从 ModelScope 下载公开权重",
+            self.script,
+        )
+        self.assertNotIn("ensure_huggingface_access", self.script)
+        self.assertNotIn("huggingface_hub", self.script)
+        self.assertNotIn("needs_huggingface", self.script)
 
     def test_upload_verifies_every_checksum_manifest_object(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -15,7 +15,6 @@ readonly OSS_REGION_ID='cn-shenzhen'
 readonly OSS_PUBLIC_ENDPOINT='https://oss-cn-shenzhen.aliyuncs.com'
 readonly OSSUTIL_VERSION='2.3.0'
 readonly OSSUTIL_SHA256='3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a'
-readonly HUGGINGFACE_HUB_VERSION='1.27.0'
 readonly TRANSFER_ROOT_DEFAULT='/root/sam3d-transfer'
 readonly SAM3D_REF='f91db411c50efee93d8db7aeb323885650f6f722'
 readonly SAM3_REF='8f0b7f4d4e7eda2ed606ebde6702c93359ad01da'
@@ -29,7 +28,6 @@ ACR_IMAGE=''
 ACR_USERNAME=''
 ACR_HOST=''
 OSSUTIL_BIN=''
-HF_BIN=''
 TOOLS_PYTHON=''
 OSS_UPLOAD_LIST=''
 GIT_COMMIT=''
@@ -93,7 +91,7 @@ cleanup() {
     docker logout "$ACR_HOST" >/dev/null 2>&1
   fi
   unset ACR_IMAGE ACR_USERNAME ACR_HOST DOCKER_CONFIG
-  unset HF_TOKEN OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
+  unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
   unset OSS_REGION OSS_ENDPOINT
   safe_remove_temp_dir
   exit "$status"
@@ -122,7 +120,7 @@ require_target_host() {
     22.04|24.04) ;;
     *) warn "当前 Ubuntu ${VERSION_ID:-unknown} 不是已验证的 22.04/24.04" ;;
   esac
-  [[ -t 0 ]] || die '脚本需要交互终端来读取 OSS、必要时的 Hugging Face 和 ACR 信息'
+  [[ -t 0 ]] || die '脚本需要交互终端来读取 OSS 和 ACR 信息'
 }
 
 prompt_required_inputs() {
@@ -308,7 +306,7 @@ ensure_temp_dir() {
 }
 
 ensure_tool_venv() {
-  CURRENT_STEP='安装 Hugging Face CLI'
+  CURRENT_STEP='准备离线资源 Python 环境'
   local tools_root='/opt/sam3d-tools'
   [[ ! -L "$tools_root" ]] || die "$tools_root 不得是符号链接"
   if [[ ! -x "$tools_root/bin/python" ]]; then
@@ -316,12 +314,7 @@ ensure_tool_venv() {
   fi
 
   TOOLS_PYTHON="$tools_root/bin/python"
-  "$TOOLS_PYTHON" -m pip install \
-    --disable-pip-version-check \
-    "huggingface_hub==${HUGGINGFACE_HUB_VERSION}"
-  HF_BIN="$tools_root/bin/hf"
-  [[ -x "$HF_BIN" ]] || die '安装 huggingface_hub 后仍未找到 hf 命令'
-  "$HF_BIN" version
+  "$TOOLS_PYTHON" --version
   export PATH="$tools_root/bin:$PATH"
 }
 
@@ -377,41 +370,6 @@ ensure_ossutil() {
   "$OSSUTIL_BIN" version
 }
 
-ensure_huggingface_access() {
-  CURRENT_STEP='验证 Hugging Face 模型权限'
-  local token=''
-  unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE
-  if [[ -z "${HF_TOKEN:-}" ]]; then
-    read -r -s -p 'Hugging Face Access Token（输入时不会显示）: ' token
-    printf '\n'
-    [[ -n "$token" ]] || die 'Hugging Face Access Token 不能为空'
-    export HF_TOKEN=$token
-    token=''
-  fi
-  if [[ "$HF_TOKEN" =~ [[:space:]] ]]; then
-    unset HF_TOKEN
-    die 'Hugging Face Access Token 不能包含空白字符'
-  fi
-
-  if ! "$HF_BIN" auth whoami >/dev/null 2>&1; then
-    unset HF_TOKEN
-    die 'Hugging Face Access Token 无效，或香港 ECS 无法连接 Hugging Face'
-  fi
-  if ! "$TOOLS_PYTHON" - <<'PY' >/dev/null 2>&1
-import os
-
-from huggingface_hub import HfApi
-
-api = HfApi()
-api.model_info("facebook/sam-3d-objects", token=os.environ["HF_TOKEN"])
-PY
-  then
-    unset HF_TOKEN
-    die '无法访问 facebook/sam-3d-objects；请确认该模型已获批且网络正常'
-  fi
-  log 'Hugging Face Access Token 验证成功；Token 仅保存在当前脚本进程环境中'
-}
-
 prepare_offline_assets() {
   CURRENT_STEP='准备并校验完整离线模型资源'
   local prepare_script="$PROJECT_ROOT/scripts/prepare_offline_assets.py"
@@ -420,7 +378,6 @@ prepare_offline_assets() {
   mkdir -p -- "$TRANSFER_ROOT"
   [[ ! -L "$TRANSFER_ROOT" ]] || die '离线资源目录不得是符号链接'
   chmod 700 "$TRANSFER_ROOT"
-  export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-60}"
 
   if "$TOOLS_PYTHON" "$prepare_script" \
     --verify-only \
@@ -428,14 +385,13 @@ prepare_offline_assets() {
     log '现有离线资源完整，跳过下载'
   else
     args=(--transfer-root "$TRANSFER_ROOT")
-    local needs_huggingface=0
     if "$TOOLS_PYTHON" "$prepare_script" \
       --verify-main-only \
       --transfer-root "$TRANSFER_ROOT" >/dev/null 2>&1; then
       log '现有 SAM3D 主 checkpoint 完整，补齐其他离线资源'
     else
       args+=(--download-sam3d)
-      needs_huggingface=1
+      log 'SAM3D 主 checkpoint 缺失，将从 ModelScope 下载公开权重'
     fi
     if "$TOOLS_PYTHON" "$prepare_script" \
       --verify-sam3-only \
@@ -445,17 +401,12 @@ prepare_offline_assets() {
       args+=(--download-sam3)
       log 'SAM3 checkpoint 缺失，将从 ModelScope 下载公开权重'
     fi
-    if [[ "$needs_huggingface" -eq 1 ]]; then
-      ensure_huggingface_access
-    fi
     "$TOOLS_PYTHON" "$prepare_script" "${args[@]}"
   fi
 
   "$TOOLS_PYTHON" "$prepare_script" \
     --verify-only \
     --transfer-root "$TRANSFER_ROOT"
-  unset HF_TOKEN
-
   local manifest="$TRANSFER_ROOT/storage/offline-assets.sha256"
   local digest
   digest="$(sha256sum "$manifest" | awk '{print substr($1, 1, 12)}')"

@@ -26,11 +26,12 @@ class DeploymentGuideContractTests(unittest.TestCase):
             "ACR 完整公网仓库地址",
             "ACR 登录用户名",
             "ACR Registry 密码",
-            "Hugging Face Access Token",
             "OSS AccessKey Secret",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.guide)
+
+        self.assertNotIn("Hugging Face Access Token", self.guide)
 
         self.assertIn("脚本没有任何可选参数", self.guide)
         self.assertNotIn("./scripts/deploy_from_hk.sh --", self.guide)
@@ -46,7 +47,12 @@ class DeploymentGuideContractTests(unittest.TestCase):
         self.assertIn("不会创建或修改函数计算", self.guide)
         self.assertIn("不会启动 GPU", self.guide)
         self.assertIn("https://modelscope.cn/models/facebook/sam3", self.guide)
-        self.assertIn("SAM3 从 ModelScope", self.guide)
+        self.assertIn("SAM3 从魔搭社区", self.guide)
+        self.assertIn(
+            "https://modelscope.cn/models/facebook/sam-3d-objects",
+            self.guide,
+        )
+        self.assertIn("SAM3D 主权重从魔搭社区", self.guide)
 
     def test_guide_documents_automatic_safety_gates(self) -> None:
         for required in (
