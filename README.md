@@ -214,5 +214,5 @@ curl -fS -X POST "$FC_URL/generate" \
 - [阿里云 FC 自定义容器及 15 GB GPU 镜像上限](https://help.aliyun.com/zh/functioncompute/custom-container/)
 - [阿里云 FC PutConcurrencyConfig](https://help.aliyun.com/zh/functioncompute/fc/developer-reference/api-fc-2023-03-30-putconcurrencyconfig)
 - [PyTorch CUDA 内存管理](https://docs.pytorch.org/docs/stable/notes/cuda.html#memory-management)
-- [SAM 3D Objects 官方安装与显存前提](https://github.com/facebookresearch/sam-3d-objects/blob/main/doc/setup.md)
+- [SAM 3D Objects 官方安装与显存前提](https://v4.gh-proxy.org/https://github.com/facebookresearch/sam-3d-objects/blob/main/doc/setup.md)
 - [SAM 3D Objects 魔搭社区模型](https://modelscope.cn/models/facebook/sam-3d-objects)

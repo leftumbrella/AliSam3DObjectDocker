@@ -55,7 +55,7 @@ apt-get update
 apt-get install -y ca-certificates git
 
 cd /root
-git clone https://github.com/leftumbrella/AliSam3DObjectDocker.git
+git clone https://v4.gh-proxy.org/https://github.com/leftumbrella/AliSam3DObjectDocker.git
 cd AliSam3DObjectDocker
 git status --short
 ```

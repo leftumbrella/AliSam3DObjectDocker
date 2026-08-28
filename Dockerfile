@@ -3,9 +3,9 @@ FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS unified-builder
 ARG DEBIAN_FRONTEND=noninteractive
 ARG MICROMAMBA_VERSION=2.8.1-0
 ARG MICROMAMBA_SHA256=9689782d863c05a1bf5d2d371ba527104e7a4eb4310c1637d8653b751aed9c82
-ARG SAM3D_REPOSITORY=https://github.com/facebookresearch/sam-3d-objects.git
+ARG SAM3D_REPOSITORY=https://v4.gh-proxy.org/https://github.com/facebookresearch/sam-3d-objects.git
 ARG SAM3D_REF=f91db411c50efee93d8db7aeb323885650f6f722
-ARG SAM3_REPOSITORY=https://github.com/facebookresearch/sam3.git
+ARG SAM3_REPOSITORY=https://v4.gh-proxy.org/https://github.com/facebookresearch/sam3.git
 # The Git source and checkpoint revisions are independently versioned; this
 # source revision is separate from the pin in scripts/prepare_offline_assets.py.
 ARG SAM3_REF=8f0b7f4d4e7eda2ed606ebde6702c93359ad01da
@@ -30,7 +30,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL \
-        "https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-linux-64" \
+        "https://v4.gh-proxy.org/https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-linux-64" \
         -o /usr/local/bin/micromamba \
     && echo "${MICROMAMBA_SHA256}  /usr/local/bin/micromamba" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/micromamba
@@ -112,8 +112,8 @@ RUN python -m pip install \
 RUN python -m pip install \
         --no-deps \
         --no-build-isolation \
-        "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@3913c65d81e05e47b9f367250cf8c0f7462a0900" \
-        "MoGe @ git+https://github.com/microsoft/MoGe.git@a8c37341bc0325ca99b9d57981cc3bb2bd3e255b"
+        "utils3d @ git+https://v4.gh-proxy.org/https://github.com/EasternJournalist/utils3d.git@3913c65d81e05e47b9f367250cf8c0f7462a0900" \
+        "MoGe @ git+https://v4.gh-proxy.org/https://github.com/microsoft/MoGe.git@a8c37341bc0325ca99b9d57981cc3bb2bd3e255b"
 
 WORKDIR /opt/sam-3d-objects
 
@@ -138,12 +138,12 @@ RUN python /tmp/check_cuda_build_env.py \
     && python -m pip install \
         --no-deps \
         --no-build-isolation \
-        "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@${PYTORCH3D_REF}"
+        "pytorch3d @ git+https://v4.gh-proxy.org/https://github.com/facebookresearch/pytorch3d.git@${PYTORCH3D_REF}"
 
 RUN python -m pip install \
         --no-deps \
         --no-build-isolation \
-        "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
+        "gsplat @ git+https://v4.gh-proxy.org/https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
 
 # Keep the expensive native-extension layers cacheable when only the offline
 # source rewrite changes.

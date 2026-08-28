@@ -94,7 +94,9 @@ SAM3_WEIGHT_SIZE = 3_450_062_241
 SAM3_WEIGHT_SHA256 = (
     "9999e2341ceef5e136daa386eecb55cb414446a00ac2b55eb2dfd2f7c3cf8c9e"
 )
-DINOV2_REPOSITORY = "https://github.com/facebookresearch/dinov2.git"
+DINOV2_REPOSITORY = (
+    "https://v4.gh-proxy.org/https://github.com/facebookresearch/dinov2.git"
+)
 DINOV2_REF = "7764ea0f912e53c92e82eb78a2a1631e92725fc8"
 DINOV2_WEIGHT_URL = (
     "https://hf-mirror.com/facebook/ShapeR/resolve/main/"

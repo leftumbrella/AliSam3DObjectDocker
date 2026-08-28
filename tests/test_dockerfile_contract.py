@@ -102,7 +102,9 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
         )
 
     def test_offline_source_patch_keeps_expensive_cuda_layers_cacheable(self) -> None:
-        gsplat_build = self.dockerfile.index('"gsplat @ git+https://github.com/')
+        gsplat_build = self.dockerfile.index(
+            '"gsplat @ git+https://v4.gh-proxy.org/https://github.com/'
+        )
         patch_copy = self.dockerfile.index(
             "COPY scripts/patch_offline_runtime.py /tmp/patch_offline_runtime.py"
         )
@@ -112,6 +114,20 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
 
         self.assertGreater(patch_copy, gsplat_build)
         self.assertGreater(patch_run, patch_copy)
+
+    def test_github_downloads_use_the_configured_proxy(self) -> None:
+        direct_prefix = "https://" + "github.com/"
+        proxy_prefix = "https://v4.gh-proxy.org/" + direct_prefix
+        for path in (
+            DOCKERFILE,
+            ROOT / "scripts" / "prepare_offline_assets.py",
+            ROOT / "README.md",
+            ROOT / "DEPLOYMENT.md",
+        ):
+            with self.subTest(path=path):
+                contents = path.read_text(encoding="utf-8")
+                self.assertNotIn(direct_prefix, contents.replace(proxy_prefix, ""))
+        self.assertIn(proxy_prefix, self.dockerfile)
 
     def test_final_runtime_repeats_the_import_and_abi_gate(self) -> None:
         runtime_stage = self.dockerfile.index("FROM ubuntu:22.04 AS runtime")
