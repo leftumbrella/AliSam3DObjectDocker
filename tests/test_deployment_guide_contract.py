@@ -67,11 +67,24 @@ class DeploymentGuideContractTests(unittest.TestCase):
             "sam3d/recipes/<资源配方 ID>/complete.json",
             "跳过全部模型下载和上传",
             "docker.1ms.run",
-            "/root/sam3d-transfer/ossutil-output",
+            "$HOME/sam3d-transfer/ossutil-output",
             "构建完成后才登录 ACR",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.guide)
+
+    def test_guide_documents_non_root_and_python_isolation(self) -> None:
+        for required in (
+            "使用普通用户直接运行脚本",
+            "不会修改用户组",
+            "不调用 `pip`",
+            "`--without-pip`",
+            "Python isolated mode",
+            "不会改写当前用户的 `PATH`",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, self.guide)
+        self.assertNotIn("sudo -i", self.guide)
 
 
 if __name__ == "__main__":

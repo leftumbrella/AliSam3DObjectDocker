@@ -82,7 +82,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 ## 一键上传资源并推送镜像
 
-一键脚本在香港 Ubuntu ECS 上优先核对并复用 OSS 已完整发布的模型资源；没有可复用资源时，才在本地准备、校验并断点上传深圳 OSS，然后构建统一镜像并推送到 ACR。脚本没有任何可选参数：
+一键脚本可由香港 Ubuntu ECS 的普通用户直接运行，优先核对并复用 OSS 已完整发布的模型资源；没有可复用资源时，才在本地准备、校验并断点上传深圳 OSS，然后构建统一镜像并推送到 ACR。宿主 Python 不会安装项目包：辅助脚本在退出即删除的无 pip venv 中以 isolated mode 运行。脚本没有任何可选参数：
 
 ```bash
 ./scripts/deploy_from_hk.sh

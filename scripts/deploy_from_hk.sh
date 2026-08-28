@@ -15,7 +15,7 @@ readonly OSS_REGION_ID='cn-shenzhen'
 readonly OSS_PUBLIC_ENDPOINT='https://oss-cn-shenzhen.aliyuncs.com'
 readonly OSSUTIL_VERSION='2.3.0'
 readonly OSSUTIL_SHA256='3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a'
-readonly TRANSFER_ROOT_DEFAULT='/root/sam3d-transfer'
+readonly SYSTEM_PYTHON='/usr/bin/python3'
 readonly ASSET_RECEIPT_SCHEMA='1'
 readonly ASSET_RECEIPT_ROOT='sam3d/recipes'
 readonly SAM3D_REF='f91db411c50efee93d8db7aeb323885650f6f722'
@@ -24,7 +24,7 @@ readonly TORCH_CUDA_ARCH_LIST_VALUE='8.9;9.0'
 readonly MAX_JOBS_VALUE='2'
 readonly NVCC_THREADS_VALUE='2'
 
-TRANSFER_ROOT=$TRANSFER_ROOT_DEFAULT
+TRANSFER_ROOT=''
 OSS_BUCKET=''
 ACR_IMAGE=''
 ACR_USERNAME=''
@@ -47,6 +47,8 @@ OSS_PREFIX=''
 DEPLOYMENT_RESULT_FILE=''
 CURRENT_STEP='启动'
 ACR_LOGIN_ACTIVE=0
+DOCKER_READY=0
+DOCKER_USE_SUDO=0
 TEMP_DIR=''
 
 log() {
@@ -77,7 +79,10 @@ safe_remove_temp_dir() {
   case "$TEMP_DIR" in
     /tmp/sam3d-acr-push.*)
       if [[ -d "$TEMP_DIR" && ! -L "$TEMP_DIR" ]]; then
-        rm -rf -- "$TEMP_DIR"
+        if ! rm -rf -- "$TEMP_DIR" >/dev/null 2>&1; then
+          run_privileged rm -rf -- "$TEMP_DIR" \
+            || warn "无法清理临时目录：$TEMP_DIR"
+        fi
       fi
       ;;
     *)
@@ -91,9 +96,9 @@ cleanup() {
   trap - ERR
   set +e
 
-  if [[ "$ACR_LOGIN_ACTIVE" -eq 1 && -n "$ACR_HOST" ]] \
-    && command -v docker >/dev/null 2>&1; then
-    docker logout "$ACR_HOST" >/dev/null 2>&1
+  if [[ "$ACR_LOGIN_ACTIVE" -eq 1 && "$DOCKER_READY" -eq 1 \
+    && -n "$ACR_HOST" ]]; then
+    run_docker logout "$ACR_HOST" >/dev/null 2>&1
   fi
   unset ACR_IMAGE ACR_USERNAME ACR_HOST DOCKER_CONFIG
   unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
@@ -112,9 +117,14 @@ require_no_arguments() {
     || die "脚本不接受任何参数。请直接运行：./scripts/$SCRIPT_NAME"
 }
 
+initialize_user_paths() {
+  local user_home=${HOME:-}
+  [[ -n "$user_home" && "$user_home" == /* ]] \
+    || die 'HOME 必须是当前用户的绝对路径'
+  TRANSFER_ROOT="$user_home/sam3d-transfer"
+}
+
 require_target_host() {
-  [[ "$EUID" -eq 0 ]] \
-    || die "请先执行 sudo -i 切换到 root，再重新运行 $SCRIPT_NAME"
   [[ "$(uname -m)" == 'x86_64' ]] || die '构建机必须是 x86_64/amd64'
   [[ -r /etc/os-release ]] || die '无法读取 /etc/os-release'
 
@@ -126,6 +136,16 @@ require_target_host() {
     *) warn "当前 Ubuntu ${VERSION_ID:-unknown} 不是已验证的 22.04/24.04" ;;
   esac
   [[ -t 0 ]] || die '脚本需要交互终端来读取 OSS 和 ACR 信息'
+}
+
+run_privileged() {
+  if [[ "$EUID" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+  command -v sudo >/dev/null 2>&1 \
+    || die "当前步骤需要系统权限，但未找到 sudo：$CURRENT_STEP"
+  sudo -- "$@"
 }
 
 prompt_required_inputs() {
@@ -196,33 +216,42 @@ check_resources() {
 }
 
 install_base_tools() {
-  CURRENT_STEP='安装 Ubuntu 基础工具'
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y \
-    ca-certificates \
-    curl \
-    git \
-    jq \
-    python3 \
-    python3-pip \
-    python3-venv \
-    unzip
-  unset DEBIAN_FRONTEND
+  CURRENT_STEP='检查并按需安装 Ubuntu 基础工具'
+  local -a packages=()
+  [[ -r /etc/ssl/certs/ca-certificates.crt ]] || packages+=(ca-certificates)
+  command -v curl >/dev/null 2>&1 || packages+=(curl)
+  command -v git >/dev/null 2>&1 || packages+=(git)
+  command -v jq >/dev/null 2>&1 || packages+=(jq)
+  command -v unzip >/dev/null 2>&1 || packages+=(unzip)
+  if [[ ! -x "$SYSTEM_PYTHON" ]] \
+    || ! "$SYSTEM_PYTHON" -I -c 'import venv' >/dev/null 2>&1; then
+    packages+=(python3-venv)
+  fi
+
+  if [[ ${#packages[@]} -eq 0 ]]; then
+    log '复用现有 Ubuntu 基础工具'
+    return
+  fi
+  run_privileged apt-get update
+  run_privileged env DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y "${packages[@]}"
 }
 
 configure_docker_repository() {
-  local codename architecture
+  local codename architecture key_file sources_file
   # shellcheck disable=SC1091
   . /etc/os-release
   codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
   architecture="$(dpkg --print-architecture)"
   [[ -n "$codename" ]] || die '无法确定 Ubuntu codename'
 
-  install -m 0755 -d /etc/apt/keyrings
+  ensure_temp_dir
+  key_file="$TEMP_DIR/docker.asc"
+  sources_file="$TEMP_DIR/docker.sources"
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    -o /etc/apt/keyrings/docker.asc
-  chmod a+r /etc/apt/keyrings/docker.asc
+    -o "$key_file"
+  run_privileged install -m 0755 -d /etc/apt/keyrings
+  run_privileged install -m 0644 "$key_file" /etc/apt/keyrings/docker.asc
 
   {
     printf 'Types: deb\n'
@@ -231,23 +260,46 @@ configure_docker_repository() {
     printf 'Components: stable\n'
     printf 'Architectures: %s\n' "$architecture"
     printf 'Signed-By: /etc/apt/keyrings/docker.asc\n'
-  } >/etc/apt/sources.list.d/docker.sources
-  apt-get update
+  } >"$sources_file"
+  run_privileged install -m 0644 \
+    "$sources_file" /etc/apt/sources.list.d/docker.sources
+  run_privileged apt-get update
+}
+
+run_docker() {
+  local status
+  [[ "$DOCKER_READY" -eq 1 ]] || die 'Docker 命令适配器尚未初始化'
+  if [[ "$DOCKER_USE_SUDO" -eq 1 ]]; then
+    if run_privileged env "DOCKER_CONFIG=$DOCKER_CONFIG" docker "$@"; then
+      status=0
+    else
+      status=$?
+    fi
+    [[ "$TEMP_DIR" == /tmp/sam3d-acr-push.* \
+      && -d "$TEMP_DIR" && ! -L "$TEMP_DIR" ]] \
+      || die 'Docker 临时目录状态异常，拒绝修改所有权'
+    run_privileged chown -R --no-dereference \
+      "$(id -u):$(id -g)" "$TEMP_DIR"
+    return "$status"
+  else
+    env "DOCKER_CONFIG=$DOCKER_CONFIG" docker "$@"
+  fi
 }
 
 ensure_docker() {
   CURRENT_STEP='安装并验证 Docker Buildx'
+  ensure_temp_dir
   if command -v docker >/dev/null 2>&1 \
     && docker buildx version >/dev/null 2>&1; then
     log '复用现有 Docker 和 Buildx'
   else
     configure_docker_repository
-    export DEBIAN_FRONTEND=noninteractive
     if command -v docker >/dev/null 2>&1; then
-      apt-get install -y docker-buildx-plugin \
+      run_privileged env DEBIAN_FRONTEND=noninteractive \
+        apt-get install -y docker-buildx-plugin \
         || die 'Buildx 安装失败，请检查是否混装了 Ubuntu docker.io 与 Docker CE'
     else
-      apt-get install -y \
+      run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y \
         containerd.io \
         docker-buildx-plugin \
         docker-ce \
@@ -255,20 +307,38 @@ ensure_docker() {
         docker-compose-plugin \
         || die 'Docker CE 安装失败，请检查 APT 软件包冲突'
     fi
-    unset DEBIAN_FRONTEND
   fi
 
-  systemctl enable --now docker
-  docker version >/dev/null
-  docker buildx version
-  docker buildx inspect --bootstrap >/dev/null
+  if ! docker version >/dev/null 2>&1 \
+    && ! systemctl is-active --quiet docker; then
+    run_privileged systemctl enable --now docker
+  fi
+
+  if docker version >/dev/null 2>&1; then
+    DOCKER_USE_SUDO=0
+    log '当前用户可直接访问 Docker daemon'
+  elif [[ "$EUID" -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+    DOCKER_USE_SUDO=1
+    DOCKER_READY=1
+    log '当前用户无 Docker socket 权限，验证仅对 Docker 命令使用 sudo'
+    run_docker version >/dev/null \
+      || die '通过 sudo 仍无法访问 Docker daemon'
+    log 'Docker sudo 适配验证成功，不会更改当前用户的用户组'
+  else
+    die '无法访问 Docker daemon；请启动 Docker，或为当前用户配置 Docker/rootless Docker 权限'
+  fi
+
+  DOCKER_READY=1
+  run_docker version >/dev/null
+  run_docker buildx version
+  run_docker buildx inspect --bootstrap >/dev/null
 }
 
 build_image() {
   CURRENT_STEP='构建 SAM3/SAM3D 统一 linux/amd64 镜像'
   cd "$PROJECT_ROOT"
   BUILD_METADATA_FILE="$TEMP_DIR/build-metadata.json"
-  docker buildx build \
+  run_docker buildx build \
     --load \
     --metadata-file "$BUILD_METADATA_FILE" \
     --progress=plain \
@@ -284,9 +354,9 @@ build_image() {
     .
 
   local platform image_size digest_hex
-  platform="$(docker image inspect "$LOCAL_IMAGE" --format '{{.Os}}/{{.Architecture}}')"
+  platform="$(run_docker image inspect "$LOCAL_IMAGE" --format '{{.Os}}/{{.Architecture}}')"
   [[ "$platform" == 'linux/amd64' ]] || die "本地镜像平台错误：$platform"
-  image_size="$(docker image inspect "$LOCAL_IMAGE" --format '{{.Size}}')"
+  image_size="$(run_docker image inspect "$LOCAL_IMAGE" --format '{{.Size}}')"
   [[ "$image_size" =~ ^[0-9]+$ ]] || die '无法读取本地镜像大小'
   LOCAL_CONFIG_DIGEST="$(
     jq -er \
@@ -307,20 +377,20 @@ build_image() {
 ensure_temp_dir() {
   if [[ -z "$TEMP_DIR" ]]; then
     TEMP_DIR="$(mktemp -d /tmp/sam3d-acr-push.XXXXXX)"
+    install -m 0700 -d "$TEMP_DIR/docker-config"
+    export DOCKER_CONFIG="$TEMP_DIR/docker-config"
   fi
 }
 
 ensure_tool_venv() {
   CURRENT_STEP='准备离线资源 Python 环境'
-  local tools_root='/opt/sam3d-tools'
-  [[ ! -L "$tools_root" ]] || die "$tools_root 不得是符号链接"
-  if [[ ! -x "$tools_root/bin/python" ]]; then
-    python3 -m venv "$tools_root"
-  fi
+  local tools_root
+  ensure_temp_dir
+  tools_root="$TEMP_DIR/python-venv"
+  "$SYSTEM_PYTHON" -I -m venv --without-pip "$tools_root"
 
   TOOLS_PYTHON="$tools_root/bin/python"
-  "$TOOLS_PYTHON" --version
-  export PATH="$tools_root/bin:$PATH"
+  "$TOOLS_PYTHON" -I --version
 }
 
 run_asset_tool() {
@@ -330,7 +400,11 @@ run_asset_tool() {
     -u OSS_SESSION_TOKEN \
     -u OSS_REGION \
     -u OSS_ENDPOINT \
-    "$TOOLS_PYTHON" "$@"
+    -u PYTHONHOME \
+    -u PYTHONPATH \
+    -u PYTHONUSERBASE \
+    -u VIRTUAL_ENV \
+    "$TOOLS_PYTHON" -I "$@"
 }
 
 ensure_transfer_root() {
@@ -374,14 +448,9 @@ ensure_ossutil() {
     return
   fi
 
-  candidate='/opt/sam3d-tools/bin/ossutil'
-  if ossutil_is_compatible "$candidate"; then
-    OSSUTIL_BIN=$candidate
-    log "复用已校验的 ossutil：$OSSUTIL_BIN"
-    return
-  fi
-
   ensure_temp_dir
+  install -m 0700 -d "$TEMP_DIR/native-tools"
+  candidate="$TEMP_DIR/native-tools/ossutil"
   archive="ossutil-${OSSUTIL_VERSION}-linux-amd64.zip"
   curl --fail --location --retry 5 --retry-all-errors \
     --output "$TEMP_DIR/$archive" \
@@ -777,13 +846,11 @@ login_acr() {
   CURRENT_STEP='登录 ACR'
   local password=''
   ensure_temp_dir
-  install -m 0700 -d "$TEMP_DIR/docker-config"
-  export DOCKER_CONFIG="$TEMP_DIR/docker-config"
 
   read -r -s -p 'ACR Registry 密码: ' password
   printf '\n'
   [[ -n "$password" ]] || die 'ACR Registry 密码不能为空'
-  printf '%s' "$password" | docker login \
+  printf '%s' "$password" | run_docker login \
     --username "$ACR_USERNAME" \
     --password-stdin \
     "$ACR_HOST"
@@ -795,7 +862,7 @@ get_remote_config_digest() {
   local remote_image=$1
   local raw lookup_error media_type child_digest config_digest
 
-  if ! raw="$(docker buildx imagetools inspect --raw "$remote_image" 2>&1)"; then
+  if ! raw="$(run_docker buildx imagetools inspect --raw "$remote_image" 2>&1)"; then
     lookup_error=${raw,,}
     case "$lookup_error" in
       *'not found'*|*'manifest unknown'*|*'name unknown'*) return 1 ;;
@@ -814,7 +881,7 @@ get_remote_config_digest() {
           '[.manifests[]? | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest]
            | if length == 1 then .[0] else empty end' <<<"$raw"
       )" || return 2
-      raw="$(docker buildx imagetools inspect --raw "$remote_image@$child_digest")" \
+      raw="$(run_docker buildx imagetools inspect --raw "$remote_image@$child_digest")" \
         || return 2
       ;;
     application/vnd.oci.image.manifest.v1+json|application/vnd.docker.distribution.manifest.v2+json)
@@ -865,7 +932,7 @@ remote_digest_matches_local_with_retry() {
 push_image() {
   CURRENT_STEP='推送统一镜像到 ACR'
   local attempt delay
-  docker tag "$LOCAL_IMAGE" "$REMOTE_IMAGE"
+  run_docker tag "$LOCAL_IMAGE" "$REMOTE_IMAGE"
 
   if remote_tag_matches_local_image; then
     log '远程不可变标签已经是同一镜像，跳过重复 push'
@@ -873,7 +940,7 @@ push_image() {
   fi
 
   for attempt in 1 2 3; do
-    if docker push "$REMOTE_IMAGE"; then
+    if run_docker push "$REMOTE_IMAGE"; then
       remote_digest_matches_local_with_retry \
         || die '镜像已推送，但远程配置摘要未与本地镜像一致'
       return
@@ -895,8 +962,8 @@ verify_remote_manifest() {
   CURRENT_STEP='检查 ACR 远程 Manifest'
   local attempt manifest_info manifest_json platforms
   for attempt in 1 2 3; do
-    if manifest_info="$(docker buildx imagetools inspect "$REMOTE_IMAGE")" \
-      && manifest_json="$(docker manifest inspect --verbose "$REMOTE_IMAGE")"; then
+    if manifest_info="$(run_docker buildx imagetools inspect "$REMOTE_IMAGE")" \
+      && manifest_json="$(run_docker manifest inspect --verbose "$REMOTE_IMAGE")"; then
       printf '%s\n' "$manifest_info"
       break
     fi
@@ -973,6 +1040,7 @@ EOF
 
 main() {
   require_no_arguments "$@"
+  initialize_user_paths
   require_target_host
   prompt_required_inputs
   validate_inputs
@@ -980,6 +1048,7 @@ main() {
   require_clean_checkout
   print_plan
   check_resources
+  ensure_temp_dir
   install_base_tools
   ensure_docker
   ensure_tool_venv
@@ -999,7 +1068,7 @@ main() {
   verify_remote_manifest
   write_deployment_result
 
-  docker logout "$ACR_HOST" >/dev/null
+  run_docker logout "$ACR_HOST" >/dev/null
   ACR_LOGIN_ACTIVE=0
   print_completion
 }

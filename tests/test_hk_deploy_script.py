@@ -103,7 +103,7 @@ class HongKongDeployScriptTests(unittest.TestCase):
             "login_acr",
             "push_image",
             "verify_remote_manifest",
-            "docker push \"$REMOTE_IMAGE\"",
+            "run_docker push \"$REMOTE_IMAGE\"",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.script)
@@ -134,6 +134,54 @@ class HongKongDeployScriptTests(unittest.TestCase):
         )
         positions = [main_block.index(step) for step in ordered_steps]
         self.assertEqual(positions, sorted(positions))
+
+    def test_non_root_execution_keeps_host_tooling_isolated(self) -> None:
+        self.assertIn('TRANSFER_ROOT="$user_home/sam3d-transfer"', self.script)
+        self.assertIn('sudo -- "$@"', self.script)
+        self.assertIn("当前用户可直接访问 Docker daemon", self.script)
+        self.assertIn("仅对 Docker 命令使用 sudo", self.script)
+        self.assertIn("run_docker buildx build", self.script)
+        self.assertIn('export DOCKER_CONFIG="$TEMP_DIR/docker-config"', self.script)
+        self.assertIn('tools_root="$TEMP_DIR/python-venv"', self.script)
+        self.assertIn(
+            '"$SYSTEM_PYTHON" -I -m venv --without-pip "$tools_root"',
+            self.script,
+        )
+        self.assertIn("readonly SYSTEM_PYTHON='/usr/bin/python3'", self.script)
+        self.assertIn('"$TOOLS_PYTHON" -I "$@"', self.script)
+        self.assertIn('candidate="$TEMP_DIR/native-tools/ossutil"', self.script)
+        self.assertIn("-u PYTHONPATH", self.script)
+        self.assertIn("-u VIRTUAL_ENV", self.script)
+        for forbidden in (
+            "请先执行 sudo -i",
+            "/opt/sam3d-tools",
+            "/root/sam3d-transfer",
+            "python3-pip",
+            "pip install",
+            'export PATH="$tools_root/bin:$PATH"',
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.script)
+
+    def test_transfer_root_defaults_to_the_invoking_users_home(self) -> None:
+        env = os.environ.copy()
+        env["HOME"] = "/tmp/sam3d-test-home"
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'source "$1"; initialize_user_paths; printf "%s" "$TRANSFER_ROOT"',
+                "bash",
+                str(SCRIPT),
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "/tmp/sam3d-test-home/sam3d-transfer")
 
     def test_both_main_checkpoints_use_modelscope_without_hf_token(self) -> None:
         self.assertIn(
@@ -644,7 +692,7 @@ upload_offline_assets
         self.assertIn("read -r -s", self.script)
         self.assertIn("--password-stdin", self.script)
         self.assertIn('export DOCKER_CONFIG="$TEMP_DIR/docker-config"', self.script)
-        self.assertIn("docker logout \"$ACR_HOST\"", self.script)
+        self.assertIn("run_docker logout \"$ACR_HOST\"", self.script)
         self.assertIn("safe_remove_temp_dir", self.script)
 
     def test_documentation_exposes_one_zero_argument_command(self) -> None:
@@ -655,6 +703,8 @@ upload_offline_assets
         self.assertIn("上传深圳 OSS", self.deployment)
         self.assertIn("sam3/sam3.pt", self.deployment)
         self.assertIn("不会创建或修改函数计算", self.deployment)
+        self.assertIn("使用普通用户直接运行脚本", self.deployment)
+        self.assertIn("不调用 `pip`", self.deployment)
 
 
 if __name__ == "__main__":

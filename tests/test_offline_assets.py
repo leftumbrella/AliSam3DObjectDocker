@@ -386,6 +386,16 @@ class OfflineAssetPreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(offline_assets.AssetError, "checksum mismatch"):
                 offline_assets.verify_checksum_manifest(storage, [asset])
 
+    def test_default_transfer_root_uses_current_users_home(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            with (
+                mock.patch.object(Path, "home", return_value=home),
+                mock.patch.object(sys, "argv", ["prepare_offline_assets.py"]),
+            ):
+                args = offline_assets.parse_args()
+        self.assertEqual(args.transfer_root, home / "sam3d-transfer")
+
     def test_cli_help_and_incomplete_verify_contract(self) -> None:
         help_result = subprocess.run(
             [sys.executable, str(SCRIPT), "--help"],
@@ -449,6 +459,8 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         self.assertNotIn("hf auth login", preparer)
         self.assertNotIn("HF_TOKEN", preparer)
         self.assertNotIn("use scripts/deploy_from_hk.sh", preparer)
+        self.assertIn('default=Path.home() / "sam3d-transfer"', preparer)
+        self.assertNotIn('Path("/root/sam3d-transfer")', preparer)
         self.assertIn(
             "modelscope.cn/models/facebook/sam-3d-objects/resolve/",
             preparer,

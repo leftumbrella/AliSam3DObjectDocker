@@ -861,7 +861,8 @@ def prepare(args: argparse.Namespace) -> None:
     print("  OSS_BUCKET='your-real-shenzhen-bucket-name'")
     print("  : \"${OSS_BUCKET:?set OSS_BUCKET to the real OSS bucket name}\"")
     print("  ossutil cp -u -r \"$TRANSFER_ROOT/storage/\" \"oss://${OSS_BUCKET}/sam3d/\" \\")
-    print("    --checkpoint-dir /root/oss-upload-checkpoints")
+    checkpoint_dir = shlex.quote(str(transfer_root / "oss-upload-checkpoints"))
+    print(f"    --checkpoint-dir {checkpoint_dir}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -871,7 +872,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--transfer-root",
         type=Path,
-        default=Path("/root/sam3d-transfer"),
+        default=Path.home() / "sam3d-transfer",
         help="working directory containing storage/, download/, and backups/",
     )
     parser.add_argument(
