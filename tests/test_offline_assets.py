@@ -277,7 +277,19 @@ class OfflineAssetPreparationTests(unittest.TestCase):
                 "modelscope.cn/models/facebook/sam3/resolve/",
                 offline_assets.SAM3_MODELSCOPE_URL,
             )
-            self.assertNotIn("huggingface.co", offline_assets.SAM3_MODELSCOPE_URL)
+            self.assertNotIn("hf-mirror.com", offline_assets.SAM3_MODELSCOPE_URL)
+
+    def test_auxiliary_weights_use_hf_mirror_urls(self) -> None:
+        self.assertEqual(
+            offline_assets.DINOV2_WEIGHT_URL,
+            "https://hf-mirror.com/facebook/ShapeR/resolve/main/"
+            "dinov2_vitl14_reg4_pretrain.pth",
+        )
+        self.assertEqual(
+            offline_assets.MOGE_WEIGHT_URL,
+            f"https://hf-mirror.com/Ruicheng/moge-vitl/resolve/"
+            f"{offline_assets.MOGE_REF}/model.pt",
+        )
 
     def test_sam3d_download_uses_pinned_modelscope_urls(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -309,7 +321,7 @@ class OfflineAssetPreparationTests(unittest.TestCase):
                 offline_assets.SAM3D_MODELSCOPE_BASE_URL,
             )
             self.assertNotIn(
-                "huggingface.co",
+                "hf-mirror.com",
                 offline_assets.SAM3D_MODELSCOPE_BASE_URL,
             )
 
@@ -401,6 +413,7 @@ class OfflineAssetPreparationTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
         preparer = SCRIPT.read_text(encoding="utf-8")
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn("scripts/prepare_offline_assets.py", readme)
         self.assertIn("/mnt/nas/sam3d/hf/moge/model.pt", readme)
@@ -418,6 +431,11 @@ class OfflineAssetPreparationTests(unittest.TestCase):
             "https://modelscope.cn/models/facebook/sam-3d-objects",
             readme,
         )
+        self.assertIn(
+            "ARG PYTORCH_WHEEL_URL=https://mirrors.aliyun.com/pytorch-wheels/cu126",
+            dockerfile,
+        )
+        self.assertIn('--find-links "${PYTORCH_WHEEL_URL}"', dockerfile)
 
 
 if __name__ == "__main__":

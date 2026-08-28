@@ -97,7 +97,7 @@ SAM3_WEIGHT_SHA256 = (
 DINOV2_REPOSITORY = "https://github.com/facebookresearch/dinov2.git"
 DINOV2_REF = "7764ea0f912e53c92e82eb78a2a1631e92725fc8"
 DINOV2_WEIGHT_URL = (
-    "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/"
+    "https://hf-mirror.com/facebook/ShapeR/resolve/main/"
     "dinov2_vitl14_reg4_pretrain.pth"
 )
 DINOV2_WEIGHT_SIZE = 1_217_607_321
@@ -106,7 +106,7 @@ DINOV2_WEIGHT_SHA256 = (
 )
 MOGE_REF = "ad326bfb61facd6c52b5a825bc1e34d7c97d9672"
 MOGE_WEIGHT_URL = (
-    f"https://huggingface.co/Ruicheng/moge-vitl/resolve/{MOGE_REF}/model.pt"
+    f"https://hf-mirror.com/Ruicheng/moge-vitl/resolve/{MOGE_REF}/model.pt"
 )
 MOGE_WEIGHT_SIZE = 1_256_823_446
 MOGE_WEIGHT_SHA256 = (

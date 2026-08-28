@@ -13,7 +13,7 @@ ARG SAM3_REF=8f0b7f4d4e7eda2ed606ebde6702c93359ad01da
 # former upstream SAM3D pin predates.
 ARG PYTORCH3D_REF=33824be3cbc87a7dd1db0f6a9a9de9ac81b2d0ba
 ARG PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu126
+ARG PYTORCH_WHEEL_URL=https://mirrors.aliyun.com/pytorch-wheels/cu126
 ARG TORCH_CUDA_ARCH_LIST=8.9;9.0
 ARG MAX_JOBS=2
 ARG NVCC_THREADS=2
@@ -85,7 +85,8 @@ RUN git init \
 
 # Install the single Torch ABI before any native extension is compiled.
 RUN python -m pip install \
-        --index-url "${PYTORCH_INDEX_URL}" \
+        --index-url "${PYPI_INDEX_URL}" \
+        --find-links "${PYTORCH_WHEEL_URL}" \
         torch==2.7.1+cu126 \
         torchvision==0.22.1+cu126
 
