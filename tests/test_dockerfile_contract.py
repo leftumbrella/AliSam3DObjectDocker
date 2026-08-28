@@ -129,6 +129,35 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
                 self.assertNotIn(direct_prefix, contents.replace(proxy_prefix, ""))
         self.assertIn(proxy_prefix, self.dockerfile)
 
+    def test_hydra_patch_download_is_proxied_bounded_and_verified(self) -> None:
+        self.assertNotIn("./patching/hydra", self.dockerfile)
+        self.assertIn(
+            "ARG HYDRA_UTILS_URL=https://v4.gh-proxy.org/"
+            "https://raw.githubusercontent.com/gleize/hydra/"
+            "78f00766b5f37672aa7232ebbf01bdd74246bd60/"
+            "hydra/core/utils.py",
+            self.dockerfile,
+        )
+        self.assertIn(
+            "ARG HYDRA_UTILS_SHA256="
+            "b5799ea99626593e7650cd6ab7e15639e32d495d1a16f71d627811f86a2a6fba",
+            self.dockerfile,
+        )
+        hydra_block = next(
+            block for block in self.run_blocks if "/tmp/hydra-core-utils.py" in block
+        )
+        for required in (
+            "--connect-timeout 15",
+            "--max-time 180",
+            "--retry 5",
+            "--retry-all-errors",
+            "--retry-max-time 300",
+            "sha256sum -c -",
+            'hydra.__version__ == "1.3.2"',
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, hydra_block)
+
     def test_final_runtime_repeats_the_import_and_abi_gate(self) -> None:
         runtime_stage = self.dockerfile.index(
             "FROM docker.1ms.run/library/ubuntu:22.04 AS runtime"

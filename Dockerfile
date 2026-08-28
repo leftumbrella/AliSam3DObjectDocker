@@ -117,10 +117,28 @@ RUN python -m pip install \
 
 WORKDIR /opt/sam-3d-objects
 
+ARG HYDRA_UTILS_URL=https://v4.gh-proxy.org/https://raw.githubusercontent.com/gleize/hydra/78f00766b5f37672aa7232ebbf01bdd74246bd60/hydra/core/utils.py
+ARG HYDRA_UTILS_SHA256=b5799ea99626593e7650cd6ab7e15639e32d495d1a16f71d627811f86a2a6fba
+
+# Upstream patching/hydra silently downloads from raw.githubusercontent.com
+# without a timeout. Fetch the same pinned patch explicitly through the proxy,
+# bound retries, and verify its content before replacing Hydra 1.3.2's module.
 RUN python -m pip install \
         --no-deps \
         -e . \
-    && ./patching/hydra
+    && curl -fsSL \
+        --connect-timeout 15 \
+        --max-time 180 \
+        --retry 5 \
+        --retry-delay 2 \
+        --retry-all-errors \
+        --retry-max-time 300 \
+        "${HYDRA_UTILS_URL}" \
+        -o /tmp/hydra-core-utils.py \
+    && echo "${HYDRA_UTILS_SHA256}  /tmp/hydra-core-utils.py" | sha256sum -c - \
+    && hydra_root="$(python -c 'import hydra; assert hydra.__version__ == "1.3.2", hydra.__version__; print(hydra.__path__[0])')" \
+    && install -m 0644 /tmp/hydra-core-utils.py "${hydra_root}/core/utils.py" \
+    && rm /tmp/hydra-core-utils.py
 
 WORKDIR /opt/sam3
 

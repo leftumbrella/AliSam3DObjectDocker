@@ -191,6 +191,7 @@ cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth
 - ACR 地址格式错误：使用完整公网 `域名/namespace/repository`，不要添加协议或 tag。
 - Docker 安装失败：检查系统是否混装 Ubuntu `docker.io` 与 Docker CE。
 - Docker 基础镜像元数据超时：基础镜像已固定通过 `docker.1ms.run` 拉取，不再直连 `registry-1.docker.io`；确认 ECS 能访问该域名后直接重跑。
+- 构建停在 `./patching/hydra`：旧构建会被上游脚本内无超时的 GitHub Raw 直链阻塞；新版已改为通过 `v4.gh-proxy.org` 显式下载、限时重试并校验 SHA-256，更新代码后直接重跑。
 - CUDA 扩展编译失败：保留首次失败日志；修复网络或资源问题后直接重跑，Buildx 会复用已完成层。
 - ACR 登录失败：使用容器镜像服务控制台提供的固定密码，不是阿里云控制台登录密码。
 - Manifest 校验失败：远程镜像必须且只能包含 `linux/amd64`。
