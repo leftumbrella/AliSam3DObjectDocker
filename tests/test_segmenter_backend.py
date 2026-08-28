@@ -86,6 +86,51 @@ class FakePredictor:
                 self._active -= 1
 
 
+class RefinementPredictor:
+    """Expose whether follow-up clicks receive the selected previous logits."""
+
+    def __init__(self) -> None:
+        self._shape = (0, 0)
+        self.calls: list[dict[str, object]] = []
+
+    def set_image(self, image: np.ndarray) -> None:
+        self._shape = image.shape[:2]
+
+    def predict(self, **kwargs: object) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        multimask = bool(kwargs["multimask_output"])
+        mask_input = kwargs.get("mask_input")
+        self.calls.append(
+            {
+                "point_coords": np.asarray(kwargs["point_coords"]).copy(),
+                "point_labels": np.asarray(kwargs["point_labels"]).copy(),
+                "mask_input": (
+                    None
+                    if mask_input is None
+                    else np.asarray(mask_input, dtype=np.float32).copy()
+                ),
+                "multimask_output": multimask,
+            }
+        )
+
+        height, width = self._shape
+        count = 3 if multimask else 1
+        masks = np.zeros((count, height, width), dtype=np.bool_)
+        logits = np.zeros((count, 256, 256), dtype=np.float32)
+        if multimask:
+            masks[2, 0, 0] = True
+            logits[2].fill(3.0)
+            scores = np.asarray([0.1, 0.2, 0.9], dtype=np.float32)
+        else:
+            # A fresh one-shot prediction switches to the new region. Feeding the
+            # previous logits makes this a refinement and preserves the old region.
+            masks[0, 0, 1] = True
+            if mask_input is not None:
+                masks[0, 0, 0] = True
+            logits[0].fill(9.0)
+            scores = np.asarray([0.8], dtype=np.float32)
+        return masks, scores, logits
+
+
 class SegmenterManagerTests(unittest.TestCase):
     def test_initializer_holds_the_shared_gpu_lock_while_loading(self) -> None:
         events: list[str] = []
@@ -322,10 +367,56 @@ class SegmenterManagerTests(unittest.TestCase):
 
             asyncio.run(exercise())
             self.assertEqual(predictor.set_image_calls, 2)
-            self.assertEqual(predictor.predict_calls, 3)
+            self.assertEqual(predictor.predict_calls, 6)
             np.testing.assert_array_equal(predictor.last_labels, [1, 0])
             np.testing.assert_array_equal(predictor.last_coords, [[2, 3], [4, 5]])
             self.assertFalse(predictor.last_multimask)
+
+    def test_follow_up_clicks_refine_with_the_selected_previous_logits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            predictor = RefinementPredictor()
+            manager = SegmenterManager(
+                _settings(Path(directory)),
+                predictor_loader=lambda _settings: predictor,
+            )
+            image = np.zeros((4, 5, 3), dtype=np.uint8)
+            first_two = (PointPrompt(1, 1, 1), PointPrompt(3, 1, 1))
+            first_three = first_two + (PointPrompt(4, 2, 0),)
+
+            async def exercise() -> None:
+                await manager.initialize()
+                mask, _ = await manager.segment(image, first_two)
+                self.assertTrue(mask[0, 0])
+                self.assertTrue(mask[0, 1])
+                await manager.segment(image, first_three)
+
+            asyncio.run(exercise())
+
+            self.assertEqual(len(predictor.calls), 3)
+            self.assertTrue(predictor.calls[0]["multimask_output"])
+            self.assertFalse(predictor.calls[1]["multimask_output"])
+            self.assertFalse(predictor.calls[2]["multimask_output"])
+            self.assertIsNone(predictor.calls[0]["mask_input"])
+            np.testing.assert_array_equal(
+                predictor.calls[0]["point_coords"],
+                [[1, 1]],
+            )
+            np.testing.assert_array_equal(
+                predictor.calls[1]["point_coords"],
+                [[1, 1], [3, 1]],
+            )
+            np.testing.assert_array_equal(
+                predictor.calls[1]["mask_input"],
+                np.full((1, 256, 256), 3.0, dtype=np.float32),
+            )
+            np.testing.assert_array_equal(
+                predictor.calls[2]["mask_input"],
+                np.full((1, 256, 256), 9.0, dtype=np.float32),
+            )
+            np.testing.assert_array_equal(
+                predictor.calls[2]["point_labels"],
+                [1, 1, 0],
+            )
 
     def test_gpu_inference_is_serialized(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

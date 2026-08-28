@@ -82,6 +82,8 @@ class SegmenterManager:
         self._gpu_lock = gpu_lock or InterProcessGpuLock(settings.gpu_lock_path)
         self._load_error: str | None = None
         self._last_image_digest: str | None = None
+        self._last_points: tuple[PointPrompt, ...] = ()
+        self._last_mask_logits: np.ndarray | None = None
 
     @property
     def loaded(self) -> bool:
@@ -148,6 +150,7 @@ class SegmenterManager:
             raise TypeError("SAM3 predictor 缺少 predict 方法")
         self._predictor = predictor
         self._last_image_digest = None
+        self._reset_interaction_cache()
         self._load_error = None
         LOGGER.info("SAM3 点选分割模型加载完成")
 
@@ -165,23 +168,96 @@ class SegmenterManager:
             if image_digest != self._last_image_digest:
                 predictor.set_image(image)
                 self._last_image_digest = image_digest
+                self._reset_interaction_cache()
 
-            point_coords = np.asarray(
-                [[point.x, point.y] for point in points],
-                dtype=np.float32,
+            return self._refine_mask(predictor, points, image.shape[:2])
+
+    def _refine_mask(
+        self,
+        predictor: Any,
+        points: tuple[PointPrompt, ...],
+        expected_shape: tuple[int, int],
+    ) -> tuple[np.ndarray, float]:
+        if not points:
+            raise ValueError("至少需要一个点选提示")
+
+        cached_count = len(self._last_points)
+        can_extend_cache = (
+            self._last_mask_logits is not None
+            and 0 < cached_count < len(points)
+            and points[:cached_count] == self._last_points
+        )
+        mask: np.ndarray | None = None
+        score: float | None = None
+        if can_extend_cache:
+            mask_logits = self._last_mask_logits
+            next_prefix_length = cached_count + 1
+        else:
+            self._reset_interaction_cache()
+            try:
+                first_positive_index = next(
+                    index for index, point in enumerate(points) if point.label == 1
+                )
+            except StopIteration as exc:
+                raise ValueError("至少需要一个加选点（label=1）") from exc
+
+            # A single positive click is ambiguous, so follow the official SAM 3
+            # workflow: request all candidates and retain the best candidate logits.
+            mask, score, mask_logits = self._predict_points(
+                predictor,
+                (points[first_positive_index],),
+                mask_input=None,
+                multimask_output=True,
+                expected_shape=expected_shape,
             )
-            point_labels = np.asarray(
-                [point.label for point in points],
-                dtype=np.int32,
+            next_prefix_length = max(2, first_positive_index + 1)
+
+        for prefix_length in range(next_prefix_length, len(points) + 1):
+            mask, score, mask_logits = self._predict_points(
+                predictor,
+                points[:prefix_length],
+                mask_input=mask_logits,
+                multimask_output=False,
+                expected_shape=expected_shape,
             )
-            masks, scores, _ = predictor.predict(
-                point_coords=point_coords,
-                point_labels=point_labels,
-                multimask_output=len(points) == 1,
-                return_logits=False,
-                normalize_coords=True,
-            )
-            return _select_best_mask(masks, scores, image.shape[:2])
+
+        if mask is None or score is None:
+            raise RuntimeError("SAM3 交互式分割没有产生 Mask")
+
+        self._last_points = points
+        self._last_mask_logits = mask_logits
+        return mask, score
+
+    @staticmethod
+    def _predict_points(
+        predictor: Any,
+        points: tuple[PointPrompt, ...],
+        *,
+        mask_input: np.ndarray | None,
+        multimask_output: bool,
+        expected_shape: tuple[int, int],
+    ) -> tuple[np.ndarray, float, np.ndarray]:
+        point_coords = np.asarray(
+            [[point.x, point.y] for point in points],
+            dtype=np.float32,
+        )
+        point_labels = np.asarray(
+            [point.label for point in points],
+            dtype=np.int32,
+        )
+        masks, scores, logits = predictor.predict(
+            point_coords=point_coords,
+            point_labels=point_labels,
+            mask_input=(None if mask_input is None else mask_input[None, :, :]),
+            multimask_output=multimask_output,
+            return_logits=False,
+            normalize_coords=True,
+        )
+        return _select_best_prediction(masks, scores, logits, expected_shape)
+
+    def _reset_interaction_cache(self) -> None:
+        self._last_points = ()
+        self._last_mask_logits = None
 
 
 def _load_sam3_predictor(settings: Settings) -> Any:
@@ -289,11 +365,12 @@ def _image_digest(image: np.ndarray) -> str:
     return digest.hexdigest()
 
 
-def _select_best_mask(
+def _select_best_prediction(
     masks: Any,
     scores: Any,
+    logits: Any,
     expected_shape: tuple[int, int],
-) -> tuple[np.ndarray, float]:
+) -> tuple[np.ndarray, float, np.ndarray]:
     mask_array = np.asarray(masks)
     if mask_array.ndim == 2:
         mask_array = mask_array[None, ...]
@@ -303,6 +380,13 @@ def _select_best_mask(
     score_array = np.asarray(scores, dtype=np.float32).reshape(-1)
     if score_array.size != mask_array.shape[0] or not np.isfinite(score_array).any():
         raise RuntimeError("SAM3 返回的 Mask 分数无效")
+
+    logits_array = np.asarray(logits, dtype=np.float32)
+    if logits_array.ndim == 2:
+        logits_array = logits_array[None, ...]
+    if logits_array.ndim != 3 or logits_array.shape[0] != mask_array.shape[0]:
+        raise RuntimeError(f"SAM3 返回了无效的 Mask logits 形状：{logits_array.shape}")
+
     safe_scores = np.where(np.isfinite(score_array), score_array, -np.inf)
     best_index = int(np.argmax(safe_scores))
     best_mask = np.asarray(mask_array[best_index]) > 0
@@ -312,7 +396,14 @@ def _select_best_mask(
             f"期望 {expected_shape[1]}x{expected_shape[0]}，"
             f"实际 {best_mask.shape}"
         )
-    return np.array(best_mask, dtype=np.bool_, copy=True), float(score_array[best_index])
+    best_logits = np.array(logits_array[best_index], dtype=np.float32, copy=True)
+    if not np.isfinite(best_logits).all():
+        raise RuntimeError("SAM3 返回的最佳 Mask logits 包含非有限值")
+    return (
+        np.array(best_mask, dtype=np.bool_, copy=True),
+        float(score_array[best_index]),
+        best_logits,
+    )
 
 
 def decode_image(data: bytes, max_pixels: int) -> np.ndarray:
