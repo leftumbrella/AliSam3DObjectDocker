@@ -78,6 +78,25 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
         self.assertGreaterEqual(preflight, 0)
         self.assertGreater(install, preflight)
 
+    def test_gsplat_submodule_fetch_is_proxied_and_bounded(self) -> None:
+        block = self._extension_block("gsplat")
+        for required in (
+            "GIT_CONFIG_COUNT=1",
+            "GIT_CONFIG_KEY_0=url.https://v4.gh-proxy.org/"
+            "https://github.com/.insteadOf",
+            "GIT_CONFIG_VALUE_0=https://github.com/",
+            "GIT_TERMINAL_PROMPT=0",
+            "GIT_HTTP_LOW_SPEED_LIMIT=1",
+            "GIT_HTTP_LOW_SPEED_TIME=30",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, block)
+        rewrite = block.find("GIT_CONFIG_COUNT")
+        install = block.find("python -m pip")
+        self.assertGreaterEqual(rewrite, 0)
+        self.assertGreater(install, rewrite)
+        self.assertNotIn("git config --global", block)
+
     def test_runtime_defaults_to_zero_egress_model_loading(self) -> None:
         for setting in (
             "HF_HUB_OFFLINE=1",
@@ -126,6 +145,10 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 contents = path.read_text(encoding="utf-8")
+                if path == DOCKERFILE:
+                    contents = contents.replace(
+                        f"GIT_CONFIG_VALUE_0={direct_prefix}", ""
+                    )
                 self.assertNotIn(direct_prefix, contents.replace(proxy_prefix, ""))
         self.assertIn(proxy_prefix, self.dockerfile)
 

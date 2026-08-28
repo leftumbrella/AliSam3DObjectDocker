@@ -158,7 +158,16 @@ RUN python /tmp/check_cuda_build_env.py \
         --no-build-isolation \
         "pytorch3d @ git+https://v4.gh-proxy.org/https://github.com/facebookresearch/pytorch3d.git@${PYTORCH3D_REF}"
 
-RUN python -m pip install \
+# pip recursively initializes gsplat's GLM submodule. That pinned .gitmodules
+# uses github.com directly, so inject a process-local Git URL rewrite instead
+# of changing global config, and abort an idle proxy transfer deterministically.
+RUN GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=url.https://v4.gh-proxy.org/https://github.com/.insteadOf \
+    GIT_CONFIG_VALUE_0=https://github.com/ \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_HTTP_LOW_SPEED_LIMIT=1 \
+    GIT_HTTP_LOW_SPEED_TIME=30 \
+    python -m pip install \
         --no-deps \
         --no-build-isolation \
         "gsplat @ git+https://v4.gh-proxy.org/https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7"
