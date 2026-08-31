@@ -24,10 +24,9 @@ HTTP 9000 -> SAM3D 网关
                `-- /generate ----------------> SAM3D
 
 GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
-平台上限：instanceConcurrency=1 + reservedConcurrency=1
 ```
 
-因此，默认运行语义正是“两个模型都预热、同一时刻只允许其中一个推理、在一个 GPU 实例上交替工作”。但这不等于两个模型空闲时不占显存。
+因此，镜像内的运行语义正是“两个模型都预热、同一时刻只允许其中一个推理、在一个 GPU 实例上交替工作”。但这不等于两个模型空闲时不占显存。
 
 ## 显存前提
 
@@ -46,16 +45,11 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 上线条件是组合实例初始化成功，并且分别完成一次 `/segment` 与 `/generate` 后仍有安全显存余量。镜像同时编译 Ada `sm_89` 与 Hopper `sm_90` 的 CUDA 扩展；具体 GPU 规格由未来运行镜像的平台配置，不属于镜像构建推送脚本的职责。
 
-## 弹性与费用
+## 函数计算控制面
 
-默认配置为：
+本仓库不创建或修改 FC 函数，也不设置预留实例、函数级并发或单实例并发。`scripts/deploy_from_hk.sh` 只准备 OSS 离线资源并构建、推送 ACR 镜像；弹性与并发由运行平台单独配置。
 
-- 最小实例数 `provisioned_instances=0`：空闲时不固定保留 GPU 实例。
-- 函数总并发上限 `reserved_concurrency=1`：整个函数最多获得一个并发配额。
-- 单实例并发 `instanceConcurrency=1`：同一实例一次只接收一个业务请求。
-- 应用层再使用共享异步锁和跨进程文件锁，防止未来配置漂移或内部调用重叠。
-
-最小实例数为 0 时，弹性创建的新实例仍会自动执行 FC Initializer，依次加载两个模型；冷启动耗时和 300 秒 Initializer 上限需要实测。运行平台是否配置预留实例与镜像构建推送过程相互独立。
+镜像内部使用共享异步锁和跨进程文件锁，将单个容器内的 GPU 加载与推理串行化。在 FC 控制面把 `/srv/scripts/fc_initializer.sh` 配为 Initializer 命令后，弹性创建的每个新实例会依次加载两个模型；冷启动耗时和 300 秒 Initializer 上限需要在实际运行平台验收。
 
 ## 项目结构
 
@@ -72,7 +66,6 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 ├── qt-client/               # Qt 5.15.2 桌面演示与 OpenGL 3D 查看器
 ├── scripts/
 │   ├── deploy_from_hk.sh    # OSS 优先复用资源，必要时上传并推送 ACR
-│   ├── configure_fc.py      # 幂等配置一个 FC 函数
 │   ├── fc_initializer.sh    # FC Initializer 回调
 │   └── prepare_offline_assets.py
 ├── constraints-unified.txt  # 防止普通 PyPI 解析器替换 cu126 Torch ABI
@@ -205,7 +198,7 @@ curl -fS -X POST "$FC_URL/generate" \
 ## 已知边界
 
 - FC Initializer 最长 300 秒；两个模型都会在这个生命周期阶段初始化。
-- 默认弹性配置只允许一个实例。如果将 reserved concurrency 调高，跨进程文件锁只保护单个容器，不能跨 FC 实例互斥。
+- 跨进程文件锁只保护单个容器，不能跨 FC 实例互斥；弹性扩容后每个实例都会独立预热并常驻两套模型。
 - 统一环境消除了重复的 Python/PyTorch/CUDA 用户态依赖，但两个服务进程仍各自创建 CUDA context，并且两套模型权重仍会常驻显存；显存只能在目标 GPU 上确认。
 - `CORS_ALLOW_ORIGINS=*` 适合匿名测试触发器；生产环境应限制 Origin，并选择符合业务要求的触发器认证方式。
 - 一键脚本不会创建或修改函数计算，也不会创建或删除 OSS Bucket、旧资源前缀及旧镜像；它只向当前内容寻址前缀写入并校验清单内对象，并在全部对象成功后更新当前资源配方的完成凭据。
@@ -214,7 +207,6 @@ curl -fS -X POST "$FC_URL/generate" \
 
 - [阿里云 FC GPU 实例类型与规格](https://help.aliyun.com/zh/functioncompute/instance-types-and-specifications)
 - [阿里云 FC 自定义容器及 15 GB GPU 镜像上限](https://help.aliyun.com/zh/functioncompute/custom-container/)
-- [阿里云 FC PutConcurrencyConfig](https://help.aliyun.com/zh/functioncompute/fc/developer-reference/api-fc-2023-03-30-putconcurrencyconfig)
 - [PyTorch CUDA 内存管理](https://docs.pytorch.org/docs/stable/notes/cuda.html#memory-management)
 - [SAM 3D Objects 官方安装与显存前提](https://v4.gh-proxy.org/https://github.com/facebookresearch/sam-3d-objects/blob/main/doc/setup.md)
 - [SAM 3D Objects 魔搭社区模型](https://modelscope.cn/models/facebook/sam-3d-objects)

@@ -109,7 +109,6 @@ class HongKongDeployScriptTests(unittest.TestCase):
                 self.assertIn(required, self.script)
 
         for removed in (
-            "configure_fc.py",
             "FC_ROLE_ARN",
             "FC_PROVISIONED_INSTANCES",
             "ALIBABA_CLOUD_ACCESS_KEY",
