@@ -6,11 +6,13 @@
 #include <QFile>
 #include <QHash>
 #include <QImage>
+#include <QPainter>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 namespace {
@@ -59,10 +61,16 @@ QByteArray minimalGlb()
     return glb;
 }
 
-QByteArray pngMask(const QSize &size)
+QByteArray pngMask(const QSize &size, const QRect &selected = QRect())
 {
     QImage mask(size, QImage::Format_Grayscale8);
-    mask.fill(255);
+    if (selected.isNull()) {
+        mask.fill(255);
+    } else {
+        mask.fill(0);
+        QPainter painter(&mask);
+        painter.fillRect(selected, Qt::white);
+    }
     QByteArray bytes;
     QBuffer buffer(&bytes);
     buffer.open(QIODevice::WriteOnly);
@@ -105,6 +113,9 @@ public:
     QVector<QByteArray> segmentBodies;
     QVector<QByteArray> generationBodies;
 
+    void setMask(const QByteArray &mask) { m_mask = mask; }
+    void setSegmentDelay(int delayMs) { m_segmentDelayMs = delayMs; }
+
 private:
     void consume(QTcpSocket *socket)
     {
@@ -132,7 +143,14 @@ private:
             reply(socket, QByteArrayLiteral("{\"ready\":true}"), "application/json");
         } else if (requestLine.startsWith("POST /segment ")) {
             segmentBodies.append(body);
-            reply(socket, m_mask, "image/png", QByteArrayLiteral("X-Segment-Score: 0.960000\r\n"));
+            const auto sendMask = [this, socket] {
+                reply(socket, m_mask, "image/png",
+                      QByteArrayLiteral("X-Segment-Score: 0.960000\r\n"));
+            };
+            if (m_segmentDelayMs > 0)
+                QTimer::singleShot(m_segmentDelayMs, this, sendMask);
+            else
+                sendMask();
         } else if (requestLine.startsWith("POST /generate ")) {
             generationBodies.append(body);
             reply(socket, m_glb, "model/gltf-binary");
@@ -160,10 +178,11 @@ private:
         socket->disconnectFromHost();
     }
 
-    QTcpServer m_server;
     QHash<QTcpSocket *, QByteArray> m_buffers;
+    QTcpServer m_server;
     QByteArray m_mask;
     QByteArray m_glb;
+    int m_segmentDelayMs = 0;
 };
 
 QPushButton *buttonWithText(QWidget &parent, const QString &text)
@@ -173,6 +192,35 @@ QPushButton *buttonWithText(QWidget &parent, const QString &text)
             return button;
     }
     return nullptr;
+}
+
+QColor colorAtWidgetPoint(const QPixmap &pixmap,
+                          const QSize &widgetSize,
+                          const QPoint &widgetPoint)
+{
+    const QImage image = pixmap.toImage().convertToFormat(QImage::Format_RGB32);
+    const int x = qBound(0,
+                         qRound(widgetPoint.x() * image.width()
+                                / qreal(widgetSize.width())),
+                         image.width() - 1);
+    const int y = qBound(0,
+                         qRound(widgetPoint.y() * image.height()
+                                / qreal(widgetSize.height())),
+                         image.height() - 1);
+    return image.pixelColor(x, y);
+}
+
+int blendChannel(int foreground, int alpha, int background)
+{
+    return qRound((foreground * alpha + background * (255 - alpha)) / 255.0);
+}
+
+int baseChannelBeforeTint(int displayed, int tint, int tintAlpha)
+{
+    return qBound(0,
+                  qRound((displayed * 255.0 - tint * tintAlpha)
+                         / (255 - tintAlpha)),
+                  255);
 }
 
 } // namespace
@@ -186,6 +234,8 @@ private slots:
     void glbLoadsAndRoundTrips();
     void invalidModelIsRejected();
     void editorUsesNativeControls();
+    void editorRendersFunctionMaskWithCorrectAlpha();
+    void editorQueuesLatestPointsWhileSegmentationIsBusy();
     void editorUsesFunctionComputeForSelectionAndGeneration();
 };
 
@@ -245,6 +295,80 @@ void ModelDataTest::editorUsesNativeControls()
              "The editor must use native interactive Qt controls.");
     QVERIFY2(editor.findChild<QStackedWidget *>(QStringLiteral("StateModal")),
              "Generation states must use a real modal stack.");
+    editor.close();
+}
+
+void ModelDataTest::editorRendersFunctionMaskWithCorrectAlpha()
+{
+    const QImage source(QStringLiteral(":/design/sample-microbe.png"));
+    QVERIFY(!source.isNull());
+    FakeFunctionServer server(source.size(), minimalGlb());
+    server.setMask(pngMask(source.size(), QRect(650, 250, 500, 500)));
+    QVERIFY(server.listen());
+
+    EditorCanvas editor;
+    QString endpointError;
+    QVERIFY2(editor.setServiceEndpoint(server.endpoint(), &endpointError), qPrintable(endpointError));
+    editor.resize(1280, 800);
+    editor.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
+
+    QWidget *imageView = editor.findChild<QWidget *>(QStringLiteral("ImageSelectionView"));
+    QVERIFY(imageView);
+    const QPixmap before = editor.grab();
+    QTest::mouseClick(imageView, Qt::LeftButton, Qt::NoModifier, QPoint(360, 470));
+    QPushButton *generateButton = buttonWithText(editor, QStringLiteral("生成 3D 模型"));
+    QVERIFY(generateButton);
+    QTRY_VERIFY_WITH_TIMEOUT(generateButton->isEnabled(), 3000);
+    const QPixmap after = editor.grab();
+
+    const QPoint samplePoint(726, 338);
+    const QColor beforeColor = colorAtWidgetPoint(before, editor.size(), samplePoint);
+    const QColor afterColor = colorAtWidgetPoint(after, editor.size(), samplePoint);
+    const int maskAlpha = qRound(255 * 0.62);
+    const int tintAlpha = 22;
+    const int tintChannels[] = {4, 9, 18};
+    const int maskChannels[] = {235, 46, 55};
+    const int beforeChannels[] = {beforeColor.red(), beforeColor.green(), beforeColor.blue()};
+    const int afterChannels[] = {afterColor.red(), afterColor.green(), afterColor.blue()};
+    for (int channel = 0; channel < 3; ++channel) {
+        const int base = baseChannelBeforeTint(beforeChannels[channel],
+                                               tintChannels[channel],
+                                               tintAlpha);
+        const int masked = blendChannel(maskChannels[channel], maskAlpha, base);
+        const int expected = blendChannel(tintChannels[channel], tintAlpha, masked);
+        QVERIFY2(qAbs(afterChannels[channel] - expected) <= 5,
+                 qPrintable(QStringLiteral("Mask channel %1 was %2, expected %3")
+                                .arg(channel)
+                                .arg(afterChannels[channel])
+                                .arg(expected)));
+    }
+    editor.close();
+}
+
+void ModelDataTest::editorQueuesLatestPointsWhileSegmentationIsBusy()
+{
+    const QImage source(QStringLiteral(":/design/sample-microbe.png"));
+    QVERIFY(!source.isNull());
+    FakeFunctionServer server(source.size(), minimalGlb());
+    server.setSegmentDelay(350);
+    QVERIFY(server.listen());
+
+    EditorCanvas editor;
+    QString endpointError;
+    QVERIFY2(editor.setServiceEndpoint(server.endpoint(), &endpointError), qPrintable(endpointError));
+    editor.resize(1280, 800);
+    editor.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
+
+    QWidget *imageView = editor.findChild<QWidget *>(QStringLiteral("ImageSelectionView"));
+    QVERIFY(imageView);
+    QTest::mouseClick(imageView, Qt::LeftButton, Qt::NoModifier, QPoint(500, 340));
+    QTRY_COMPARE_WITH_TIMEOUT(server.segmentBodies.size(), 1, 2000);
+    QTest::mouseClick(imageView, Qt::LeftButton, Qt::NoModifier, QPoint(650, 400));
+    QTRY_COMPARE_WITH_TIMEOUT(server.segmentBodies.size(), 2, 3000);
+    QCOMPARE(server.segmentBodies.first().count("\"label\""), 1);
+    QCOMPARE(server.segmentBodies.last().count("\"label\""), 2);
     editor.close();
 }
 

@@ -357,7 +357,8 @@ public:
                 const int gray = qGray(input[x]);
                 const int sourceAlpha = qAlpha(input[x]);
                 const int coverage = sourceAlpha < 255 ? qMax(gray, sourceAlpha) : gray;
-                output[x] = qRgba(235, 46, 55, qRound(coverage * 0.62));
+                output[x] = qPremultiply(
+                    qRgba(235, 46, 55, qRound(coverage * 0.62)));
             }
         }
         update();
@@ -821,7 +822,14 @@ EditorCanvas::EditorCanvas(QWidget *parent)
     });
     connect(m_client, &Sam3dClient::segmentationBusyChanged, this, [this](bool busy) {
         m_segmentBusy = busy;
-        m_imageView->setInteractive(!busy && m_aiSwitch->isChecked());
+        if (!busy && m_segmentQueued) {
+            QTimer::singleShot(0, this, [this] {
+                if (!m_segmentQueued || m_segmentBusy)
+                    return;
+                m_segmentQueued = false;
+                dispatchSegmentation();
+            });
+        }
         applyState(false);
     });
     connect(m_client, &Sam3dClient::segmentationFinished, this,
@@ -1211,9 +1219,11 @@ void EditorCanvas::buildToolBars()
     m_aiSwitch = new ToggleSwitch(m_aiTools);
     connect(m_aiSwitch, &QAbstractButton::toggled, this, [this](bool enabled) {
         m_statusIcon->setText(enabled ? QStringLiteral("✦") : QStringLiteral("◌"));
-        m_imageView->setInteractive(enabled && !m_segmentBusy);
-        if (!enabled)
+        m_imageView->setInteractive(enabled && m_state != UiState::Generating);
+        if (!enabled) {
+            m_segmentQueued = false;
             m_client->cancelSegmentation();
+        }
         updateSelectionState();
     });
 
@@ -1444,6 +1454,8 @@ void EditorCanvas::applyState(bool animateModal)
                                        : QStringLiteral("AI 捕捉已关闭"));
     } else if (!m_selectionError.isEmpty()) {
         m_statusLabel->setText(QStringLiteral("选区计算失败：%1").arg(m_selectionError));
+    } else if (m_segmentQueued) {
+        m_statusLabel->setText(QStringLiteral("已排队最新选区，当前请求完成后自动更新"));
     } else if (m_segmentBusy) {
         m_statusLabel->setText(QStringLiteral("正在通过函数计算更新选区 · POST /segment"));
     } else if (m_maskReady) {
@@ -1452,14 +1464,16 @@ void EditorCanvas::applyState(bool animateModal)
         m_statusLabel->setText(QStringLiteral("等待函数返回选区 Mask"));
     }
 
-    m_generateButton->setEnabled(m_maskReady && m_state != UiState::Generating);
+    m_generateButton->setEnabled(m_maskReady
+                                 && !m_segmentBusy
+                                 && !m_segmentQueued
+                                 && m_state != UiState::Generating);
     m_addButton->setEnabled(m_state != UiState::Generating);
     m_subtractButton->setEnabled(m_state != UiState::Generating);
     m_addButton->setChecked(m_addMode);
     m_subtractButton->setChecked(!m_addMode);
     m_imageView->setAddMode(m_addMode);
     m_imageView->setInteractive(m_aiSwitch->isChecked()
-                                && !m_segmentBusy
                                 && m_state != UiState::Generating);
 
     const bool hasResult = m_state == UiState::Result && !m_model.isEmpty();
@@ -1525,6 +1539,7 @@ void EditorCanvas::openImage()
         return;
     }
 
+    m_segmentQueued = false;
     m_client->cancelSegmentation();
     m_client->cancelGeneration();
     ++m_selectionRevision;
@@ -1546,6 +1561,7 @@ void EditorCanvas::rotateImage()
         return;
     QTransform transform;
     transform.rotate(90.0);
+    m_segmentQueued = false;
     m_client->cancelSegmentation();
     ++m_selectionRevision;
     m_maskReady = false;
@@ -1646,7 +1662,33 @@ void EditorCanvas::requestSegmentation()
         }
     }
     if (m_demoStateLocked || points.isEmpty() || !hasPositive) {
+        m_segmentQueued = false;
         m_client->cancelSegmentation();
+        applyState(false);
+        return;
+    }
+
+    if (m_segmentBusy || m_segmentQueued) {
+        m_segmentQueued = true;
+        applyState(false);
+        return;
+    }
+
+    dispatchSegmentation();
+}
+
+void EditorCanvas::dispatchSegmentation()
+{
+    const QVector<Sam3dClient::Point> points = m_imageView->points();
+    bool hasPositive = false;
+    for (const Sam3dClient::Point &point : points) {
+        if (point.label == 1) {
+            hasPositive = true;
+            break;
+        }
+    }
+    if (m_demoStateLocked || points.isEmpty() || !hasPositive) {
+        m_segmentQueued = false;
         applyState(false);
         return;
     }
@@ -1729,6 +1771,7 @@ void EditorCanvas::keyPressEvent(QKeyEvent *event)
 void EditorCanvas::setDemoState(const QString &stateName)
 {
     const QString name = stateName.trimmed().toLower();
+    m_segmentQueued = false;
     m_client->cancelSegmentation();
     m_client->cancelGeneration();
     m_toastTimer.stop();

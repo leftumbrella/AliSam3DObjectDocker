@@ -75,6 +75,7 @@ private:
     void configureService();
     void saveModel();
     void requestSegmentation();
+    void dispatchSegmentation();
     void beginGeneration();
     void completeGeneration(const QByteArray &glb);
     void toggleFullscreen();
@@ -93,6 +94,7 @@ private:
     bool m_savedToastVisible = false;
     bool m_demoStateLocked = false;
     bool m_segmentBusy = false;
+    bool m_segmentQueued = false;
     bool m_maskReady = false;
     bool m_serviceReady = false;
     quint64 m_selectionRevision = 0;
