@@ -2,6 +2,8 @@
 
 本项目把 SAM 3 点选分割和 SAM 3D Objects 重建放进同一个阿里云函数计算（FC）GPU 函数。浏览器只配置一个 HTTP 地址：鼠标点选调用 `POST /segment` 得到 Mask，再把原图和 Mask 交给同一地址的 `POST /generate`，返回 PLY 或 GLB。
 
+仓库同时提供按 `design` 设计稿实现的独立 [Qt C++ 桌面客户端](qt-client/README.md)，支持显微图选区、完整生成状态以及 OBJ/PLY 模型旋转、缩放、平移、全屏与导出。
+
 从香港 ECS 或本地电脑的 WSL2 Ubuntu 上传离线资源并推送镜像时，请直接阅读 [香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)；两种环境都必须使用 OSS 和 ACR 公网地址。
 
 ## 当前架构
@@ -67,6 +69,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 │   └── settings.py
 ├── segmenter/               # SAM3 内部服务与点选推理
 ├── shared/gpu_lock.py       # 两个进程共用的 GPU 文件锁
+├── qt-client/               # Qt 5.15.2 桌面演示与 OpenGL 3D 查看器
 ├── scripts/
 │   ├── deploy_from_hk.sh    # OSS 优先复用资源，必要时上传并推送 ACR
 │   ├── configure_fc.py      # 幂等配置一个 FC 函数

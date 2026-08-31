@@ -21,3 +21,11 @@ outputs/
 *.pth
 hf_*
 *token*
+
+# Qt local build output
+qt-client/build*/
+qt-client/.qmake.stash
+qt-client/Makefile*
+qt-client/debug/
+qt-client/release/
+qt-client/*.user*

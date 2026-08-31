@@ -1,0 +1,10 @@
+<RCC>
+    <qresource prefix="/design">
+        <file alias="sample-microbe.png">assets/sample-microbe.png</file>
+        <file alias="sample-selected.png">assets/sample-selected.png</file>
+        <file alias="sample-confirm.png">assets/sample-confirm.png</file>
+        <file alias="sample-generating.png">assets/sample-generating.png</file>
+        <file alias="sample-failed.png">assets/sample-failed.png</file>
+        <file alias="sample-saved.png">assets/sample-saved.png</file>
+    </qresource>
+</RCC>
