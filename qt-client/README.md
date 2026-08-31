@@ -6,7 +6,7 @@
 
 项目使用 Qt 5.15.2 `msvc2019_x64`。在 Visual Studio x64 开发环境中执行：
 
-也可以直接双击 `build-release.bat` 构建，再双击 `run-release.bat` 启动。
+也可以直接双击 `run-release.bat`；脚本会先执行一次增量构建再启动，避免运行到旧的 EXE。仅需构建时可单独双击 `build-release.bat`。
 
 ```bat
 mkdir build
