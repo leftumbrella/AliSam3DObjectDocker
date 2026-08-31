@@ -131,6 +131,23 @@ class BrowserTestClientContractTests(unittest.TestCase):
         self.assertNotIn("transition: all", self.html)
         self.assertNotIn("—", self.html)
 
+    def test_editor_exposes_the_complete_design_state_flow(self) -> None:
+        for element_id in (
+            "credit-dialog",
+            "generating-dialog",
+            "failure-dialog",
+            "model-canvas",
+            "save-toast",
+            "fullscreen-button",
+        ):
+            with self.subTest(element_id=element_id):
+                self.assertIn(f'id="{element_id}"', self.html)
+        self.assertIn("确认生成 3D 模型", self.html)
+        self.assertIn("正在生成 3D 模型", self.html)
+        self.assertIn("3D 模型生成失败", self.html)
+        self.assertIn("已保存为模型", self.html)
+        self.assertIn("raw === null ? Number.NaN", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()

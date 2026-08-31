@@ -4,1434 +4,616 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>SAM 3D FC 测试台</title>
+  <title>SAM 3D 对象编辑器</title>
   <style>
     :root {
       color-scheme: dark;
-      --canvas: oklch(14% 0.012 145);
-      --surface-1: oklch(18% 0.014 145);
-      --surface-2: oklch(22% 0.016 145);
-      --surface-3: oklch(27% 0.018 145);
-      --line: oklch(36% 0.018 145);
-      --line-strong: oklch(49% 0.028 145);
-      --text: oklch(94% 0.014 95);
-      --muted: oklch(70% 0.025 115);
-      --dim: oklch(55% 0.025 125);
-      --accent: oklch(84% 0.19 130);
-      --accent-ink: oklch(18% 0.045 135);
-      --warning: oklch(79% 0.15 78);
-      --danger: oklch(70% 0.19 25);
-      --info: oklch(77% 0.105 235);
-      --radius-sm: 4px;
-      --radius-md: 8px;
-      --radius-lg: 14px;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      --canvas: oklch(10.5% 0.018 256);
+      --nav: oklch(15.5% 0.026 267);
+      --surface: oklch(18.5% 0.028 263);
+      --raised: oklch(22.5% 0.03 263);
+      --hover: oklch(27% 0.034 263);
+      --line-soft: oklch(34% 0.026 263 / 0.72);
+      --line: oklch(43% 0.035 263 / 0.82);
+      --text: oklch(94% 0.014 262);
+      --muted: oklch(70% 0.034 263);
+      --dim: oklch(55% 0.033 263);
+      --blue: oklch(61% 0.225 262);
+      --blue-hover: oklch(67% 0.21 260);
+      --red: oklch(64% 0.235 27);
+      --green: oklch(75% 0.15 157);
+      --r-sm: 8px;
+      --r-md: 12px;
+      --r-lg: 20px;
+      --r-pill: 999px;
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
     }
 
-    * {
-      box-sizing: border-box;
-    }
-
-    html {
-      background: var(--canvas);
-      scroll-behavior: smooth;
-    }
-
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { width: 100%; min-width: 320px; min-height: 100%; margin: 0; background: var(--canvas); }
     body {
-      min-width: 320px;
-      margin: 0;
+      min-height: 100dvh;
+      overflow: hidden;
       color: var(--text);
-      background: var(--canvas);
-      font-family: var(--font-sans);
-      font-size: 15px;
-      line-height: 1.55;
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
-
-    button,
-    input {
-      font: inherit;
-    }
-
-    button,
-    a,
-    label,
-    input {
-      touch-action: manipulation;
-    }
-
-    button,
-    .button-link {
-      min-height: 44px;
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius-sm);
+    button, input { font: inherit; }
+    button, a, input, label { touch-action: manipulation; }
+    button, .button-link {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-md);
       color: var(--text);
-      background: var(--surface-2);
+      background: var(--raised);
       cursor: pointer;
-      font-weight: 700;
-      letter-spacing: 0.01em;
-      transition: transform 120ms ease, background-color 160ms ease, border-color 160ms ease, color 160ms ease, opacity 160ms ease;
+      transition-property: transform, color, background-color, border-color, opacity;
+      transition-duration: 120ms, 160ms, 160ms, 160ms, 160ms;
+      transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
     }
-
-    button:hover,
-    .button-link:hover {
-      border-color: var(--muted);
-      background: var(--surface-3);
-    }
-
-    button:active,
-    .button-link:active {
-      transform: translateY(2px);
-    }
-
-    button:disabled {
-      cursor: not-allowed;
-      opacity: 0.42;
-    }
-
-    button:focus-visible,
-    a:focus-visible,
-    input:focus-visible,
-    .drop-zone:focus-within {
-      outline: 3px solid color-mix(in oklch, var(--accent) 70%, transparent);
+    button:active, .button-link:active { transform: scale(0.96); }
+    button:disabled { cursor: not-allowed; opacity: 0.42; }
+    button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+      outline: 3px solid color-mix(in oklch, var(--blue) 72%, transparent);
       outline-offset: 3px;
     }
-
+    @media (hover: hover) {
+      button:hover, .button-link:hover { border-color: color-mix(in oklch, var(--line) 74%, var(--text)); background: var(--hover); }
+      .primary-button:hover { background: var(--blue-hover); }
+      .danger-button:hover { background: color-mix(in oklch, var(--red) 88%, black); }
+    }
+    .icon {
+      display: block;
+      width: 20px;
+      height: 20px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.8;
+      pointer-events: none;
+    }
     .skip-link {
       position: fixed;
-      z-index: 20;
+      z-index: 100;
       top: 12px;
       left: 12px;
-      padding: 10px 14px;
-      color: var(--accent-ink);
-      background: var(--accent);
-      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      color: white;
+      background: var(--blue);
+      border-radius: var(--r-sm);
       transform: translateY(-160%);
     }
-
-    .skip-link:focus {
-      transform: translateY(0);
-    }
-
-    .shell {
-      width: min(1520px, 100%);
-      margin: 0 auto;
-      padding: 28px clamp(16px, 3vw, 48px) 48px;
-    }
-
-    .masthead {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: end;
-      gap: 24px;
-      padding: 18px 0 24px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .eyebrow,
-    .section-index,
-    .micro-label,
-    .status-label,
-    .log-method,
-    .timer-label {
-      font-family: var(--font-mono);
-      font-size: 12px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-
-    .eyebrow {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      margin: 0 0 10px;
-      color: var(--accent);
-    }
-
-    .eyebrow::before {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent);
-      content: "";
-      box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 16%, transparent);
-    }
-
-    h1,
-    h2,
-    h3,
-    p {
-      margin-top: 0;
-    }
-
-    h1 {
-      max-width: 900px;
-      margin-bottom: 8px;
-      font-size: clamp(34px, 5.2vw, 72px);
-      font-weight: 780;
-      letter-spacing: -0.055em;
-      line-height: 0.98;
-    }
-
-    .subtitle {
-      max-width: 760px;
-      margin: 0;
-      color: var(--muted);
-      font-size: clamp(15px, 1.5vw, 18px);
-    }
-
-    .build-stamp {
-      min-width: 170px;
-      padding: 14px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-md);
-      background: var(--surface-1);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      text-align: right;
-    }
-
-    .build-stamp strong {
-      display: block;
-      margin-bottom: 4px;
-      color: var(--accent);
-      font-size: 16px;
-    }
-
-    .endpoint-panel {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 14px 18px;
-      align-items: end;
-      padding: 22px 0;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .endpoint-fields {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 12px;
-    }
-
-    .field-label {
-      display: block;
-      margin-bottom: 7px;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-
-    .endpoint-input {
-      width: 100%;
-      min-height: 48px;
-      padding: 0 14px;
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius-sm);
-      color: var(--text);
-      background: var(--surface-1);
-      font-family: var(--font-mono);
-      font-size: 14px;
-    }
-
-    .endpoint-input::selection {
-      color: var(--accent-ink);
-      background: var(--accent);
-    }
-
-    .endpoint-actions,
-    .button-row,
-    .result-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .endpoint-actions button,
-    .button-row button,
-    .button-link {
-      padding: 10px 15px;
-      white-space: nowrap;
-    }
-
-    .primary-button {
-      border-color: var(--accent);
-      color: var(--accent-ink);
-      background: var(--accent);
-    }
-
-    .primary-button:hover {
-      border-color: var(--text);
-      color: var(--accent-ink);
-      background: color-mix(in oklch, var(--accent) 88%, white);
-    }
-
-    .danger-button {
-      border-color: color-mix(in oklch, var(--danger) 65%, var(--line));
-      color: color-mix(in oklch, var(--danger) 70%, white);
-      background: color-mix(in oklch, var(--danger) 12%, var(--surface-2));
-    }
-
-    .endpoint-note {
-      grid-column: 1 / -1;
-      margin: -2px 0 0;
-      color: var(--dim);
-      font-size: 13px;
-    }
-
-    .notices {
-      display: grid;
-      gap: 10px;
-      margin: 16px 0 0;
-    }
-
-    .notice {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: 12px;
-      padding: 14px 16px;
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius-md);
-      background: var(--surface-1);
-    }
-
-    .notice[hidden] {
-      display: none;
-    }
-
-    .notice-mark {
-      color: var(--warning);
-      font-family: var(--font-mono);
-      font-weight: 800;
-    }
-
-    .notice strong {
-      display: block;
-      margin-bottom: 2px;
-    }
-
-    .notice p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 14px;
-    }
-
-    .notice[data-tone="danger"] {
-      border-color: color-mix(in oklch, var(--danger) 65%, var(--line));
-    }
-
-    .notice[data-tone="danger"] .notice-mark {
-      color: var(--danger);
-    }
-
-    .notice[data-tone="info"] .notice-mark {
-      color: var(--info);
-    }
-
-    .console-layout {
-      display: grid;
-      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-      gap: 18px;
-      margin-top: 18px;
-    }
-
-    .rail,
-    .workspace {
-      display: grid;
-      align-content: start;
-      gap: 18px;
-    }
-
-    .panel {
-      border: 1px solid var(--line);
-      border-radius: var(--radius-lg);
-      background: var(--surface-1);
+    .skip-link:focus { transform: translateY(0); }
+    .editor {
+      position: relative;
+      min-height: 100dvh;
       overflow: hidden;
-    }
-
-    .panel-header {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: baseline;
-      padding: 15px 18px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .panel-header h2,
-    .panel-header h3 {
-      margin: 0;
-      font-size: 16px;
-      letter-spacing: -0.015em;
-    }
-
-    .section-index {
-      color: var(--accent);
-    }
-
-    .panel-body {
-      padding: 18px;
-    }
-
-    .status-list {
-      margin: 0;
-    }
-
-    .status-row {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: 12px;
-      padding: 13px 0;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .status-row:first-child {
-      padding-top: 0;
-    }
-
-    .status-row:last-child {
-      padding-bottom: 0;
-      border-bottom: 0;
-    }
-
-    .status-dot {
-      width: 10px;
-      height: 10px;
-      margin-top: 6px;
-      border-radius: 50%;
-      background: var(--dim);
-      box-shadow: 0 0 0 3px color-mix(in oklch, var(--dim) 15%, transparent);
-    }
-
-    .status-row[data-tone="good"] .status-dot {
-      background: var(--accent);
-      box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 15%, transparent);
-    }
-
-    .status-row[data-tone="warn"] .status-dot {
-      background: var(--warning);
-      box-shadow: 0 0 0 3px color-mix(in oklch, var(--warning) 15%, transparent);
-    }
-
-    .status-row[data-tone="bad"] .status-dot {
-      background: var(--danger);
-      box-shadow: 0 0 0 3px color-mix(in oklch, var(--danger) 15%, transparent);
-    }
-
-    .status-row[data-tone="pending"] .status-dot {
-      background: var(--info);
-      animation: status-pulse 1.2s ease-in-out infinite;
-    }
-
-    @keyframes status-pulse {
-      50% { opacity: 0.35; }
-    }
-
-    .status-label {
-      display: block;
-      margin-bottom: 2px;
-      color: var(--dim);
-    }
-
-    .status-value {
-      display: block;
-      color: var(--text);
-      font-weight: 720;
-      overflow-wrap: anywhere;
-    }
-
-    .status-detail {
-      display: block;
-      margin-top: 2px;
-      color: var(--muted);
-      font-size: 12px;
-      overflow-wrap: anywhere;
-    }
-
-    .operation-copy {
-      margin-bottom: 14px;
-      color: var(--muted);
-      font-size: 14px;
-    }
-
-    .timer {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 10px;
-      margin-top: 16px;
-      padding-top: 14px;
-      border-top: 1px solid var(--line);
-    }
-
-    .timer-label {
-      color: var(--dim);
-    }
-
-    .timer-value {
-      color: var(--accent);
-      font-family: var(--font-mono);
-      font-size: 20px;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .log-list {
-      display: grid;
-      max-height: 360px;
-      margin: 0;
-      padding: 0;
-      overflow: auto;
-      list-style: none;
-    }
-
-    .log-empty {
-      padding: 22px 18px;
-      color: var(--dim);
-      font-size: 13px;
-    }
-
-    .log-entry {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
-      gap: 9px;
-      padding: 11px 14px;
-      border-bottom: 1px solid var(--line);
-      font-family: var(--font-mono);
-      font-size: 11px;
-    }
-
-    .log-entry:last-child {
-      border-bottom: 0;
-    }
-
-    .log-time {
-      color: var(--dim);
-    }
-
-    .log-path {
-      min-width: 0;
-      color: var(--muted);
-      overflow-wrap: anywhere;
-    }
-
-    .log-status {
-      color: var(--text);
-      text-align: right;
-    }
-
-    .log-entry[data-tone="good"] .log-status {
-      color: var(--accent);
-    }
-
-    .log-entry[data-tone="bad"] .log-status {
-      color: var(--danger);
-    }
-
-    .log-entry[data-tone="warn"] .log-status {
-      color: var(--warning);
-    }
-
-    .quiet-button {
-      min-height: 32px;
-      padding: 4px 9px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .selection-toolbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: end;
-      gap: 14px;
-      margin-bottom: 12px;
-    }
-
-    .selection-tools,
-    .selection-actions,
-    .editor-footer {
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .selection-tools {
-      margin: 0;
-      padding: 0;
-      border: 0;
-    }
-
-    .selection-actions button,
-    .editor-footer button {
-      min-height: 40px;
-      padding: 7px 12px;
-    }
-
-    .upload-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-    }
-
-    .source-pane {
-      min-width: 0;
-    }
-
-    .drop-zone {
-      position: relative;
-      display: grid;
-      min-height: 330px;
-      border: 1px dashed var(--line-strong);
-      border-radius: var(--radius-md);
-      background: var(--canvas);
-      cursor: pointer;
-      overflow: hidden;
-      transition: border-color 160ms ease, background-color 160ms ease, transform 120ms ease;
-    }
-
-    .drop-zone:hover,
-    .drop-zone[data-dragging="true"] {
-      border-color: var(--accent);
-      background: color-mix(in oklch, var(--accent) 4%, var(--canvas));
-    }
-
-    .drop-zone:active {
-      transform: translateY(2px);
-    }
-
-    .drop-zone[hidden] {
-      display: none;
-    }
-
-    .file-input {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      margin: -1px;
-      padding: 0;
-      border: 0;
-      overflow: hidden;
-      clip: rect(0 0 0 0);
-      white-space: nowrap;
-    }
-
-    .preview-empty,
-    .preview-filled {
-      grid-area: 1 / 1;
-    }
-
-    .preview-empty {
-      position: relative;
-      display: grid;
-      place-content: center;
-      gap: 8px;
-      min-height: 330px;
-      padding: 32px;
-      text-align: center;
-    }
-
-    .preview-empty::before,
-    .preview-empty::after {
-      position: absolute;
-      inset: 50% auto auto 50%;
-      background: var(--line);
-      content: "";
-      pointer-events: none;
-    }
-
-    .preview-empty::before {
-      width: min(74%, 260px);
-      height: 1px;
-      transform: translate(-50%, -50%);
-    }
-
-    .preview-empty::after {
-      width: 1px;
-      height: min(60%, 190px);
-      transform: translate(-50%, -50%);
-    }
-
-    .preview-copy {
-      position: relative;
-      z-index: 1;
-      padding: 14px;
-      background: color-mix(in oklch, var(--canvas) 93%, transparent);
-    }
-
-    .preview-copy strong {
-      display: block;
-      margin-bottom: 4px;
-      font-size: 16px;
-    }
-
-    .preview-copy span {
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .preview-filled {
-      position: relative;
-      display: grid;
-      min-height: 330px;
-      background: var(--canvas);
-    }
-
-    .preview-filled[hidden] {
-      display: none;
-    }
-
-    .preview-filled img {
-      width: 100%;
-      height: 100%;
-      min-height: 330px;
-      object-fit: contain;
-    }
-
-    .selection-editor {
-      display: grid;
-      gap: 10px;
-    }
-
-    .selection-editor[hidden] {
-      display: none;
-    }
-
-    .selection-stage,
-    .mask-zone {
-      position: relative;
-      display: grid;
-      min-height: 330px;
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius-md);
-      background: var(--canvas);
-      overflow: hidden;
-    }
-
-    .selection-stage {
-      cursor: crosshair;
+      background: radial-gradient(circle at 76% 35%, oklch(24% 0.05 250 / 0.66), transparent 44%), var(--canvas);
       isolation: isolate;
     }
-
-    .selection-stage:hover {
-      border-color: var(--accent);
-    }
-
-    .selection-stage:focus-visible {
-      outline: 3px solid color-mix(in oklch, var(--accent) 70%, transparent);
-      outline-offset: 3px;
-    }
-
-    .selection-stage[aria-disabled="true"] {
-      cursor: wait;
-      opacity: 0.72;
-    }
-
-    .selection-stage > img {
-      grid-area: 1 / 1;
-      width: 100%;
-      height: 100%;
-      min-height: 330px;
-      object-fit: contain;
-      user-select: none;
-      -webkit-user-drag: none;
-    }
-
-    .mask-overlay,
-    .point-layer {
-      position: absolute;
-      z-index: 2;
-      pointer-events: none;
-    }
-
-    .point-layer {
-      z-index: 3;
-      inset: 0;
-    }
-
-    .point-marker {
-      position: absolute;
-      width: 14px;
-      height: 14px;
-      border: 2px solid var(--text);
-      border-radius: 50%;
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
-      transform: translate(-50%, -50%);
-    }
-
-    .point-marker[data-label="1"] {
-      background: var(--accent);
-    }
-
-    .point-marker[data-label="0"] {
-      background: var(--danger);
-    }
-
-    .point-marker[data-cursor="true"] {
-      width: 18px;
-      height: 18px;
-      border-color: var(--info);
-      background: transparent;
-      box-shadow: 0 0 0 2px var(--canvas);
-    }
-
-    .segment-progress {
+    .editor::after {
       position: absolute;
       z-index: 4;
-      top: 10px;
-      right: 10px;
-      padding: 7px 9px;
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius-sm);
-      color: var(--text);
-      background: color-mix(in oklch, var(--canvas) 92%, transparent);
-      font-family: var(--font-mono);
-      font-size: 11px;
-    }
-
-    .segment-progress[hidden] {
-      display: none;
-    }
-
-    .mask-zone {
-      border-style: dashed;
-    }
-
-    .mask-zone .preview-filled img {
-      image-rendering: auto;
-    }
-
-    .editor-footer {
-      justify-content: space-between;
-      min-height: 42px;
-    }
-
-    .editor-footer .file-meta {
-      position: static;
-      min-width: 0;
-      flex: 1 1 260px;
-    }
-
-    .file-meta {
-      position: absolute;
-      right: 10px;
-      bottom: 10px;
-      left: 10px;
-      padding: 9px 11px;
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius-sm);
-      color: var(--text);
-      background: color-mix(in oklch, var(--canvas) 92%, transparent);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      overflow-wrap: anywhere;
-    }
-
-    .upload-rules {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 16px;
-      margin: 14px 0 0;
-      color: var(--dim);
-      font-size: 12px;
-    }
-
-    .upload-validation {
-      min-height: 24px;
-      margin: 10px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .upload-validation[data-tone="good"] {
-      color: var(--accent);
-    }
-
-    .upload-validation[data-tone="bad"] {
-      color: var(--danger);
-    }
-
-    .selection-help {
-      margin: 6px 0 0;
-      color: var(--dim);
-      font-size: 12px;
-    }
-
-    .generate-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(170px, 0.42fr);
-      gap: 18px;
-      align-items: end;
-    }
-
-    .format-control {
-      display: inline-grid;
-      grid-template-columns: repeat(2, minmax(90px, 1fr));
-      gap: 4px;
-      padding: 4px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-md);
-      background: var(--canvas);
-    }
-
-    .format-option {
-      position: relative;
-      display: block;
-    }
-
-    .format-option input {
-      position: absolute;
-      opacity: 0;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(5, 10, 20, 0.12), transparent 30%, transparent 64%, rgba(5, 10, 20, 0.32));
+      content: "";
       pointer-events: none;
     }
-
-    .format-option span {
+    .topbar {
+      position: fixed;
+      z-index: 20;
+      top: 28px;
+      right: 40px;
+      left: 40px;
       display: grid;
-      min-height: 42px;
-      place-items: center;
-      border: 1px solid transparent;
-      border-radius: var(--radius-sm);
-      color: var(--muted);
-      cursor: pointer;
-      font-family: var(--font-mono);
-      font-weight: 800;
-    }
-
-    .format-option input:checked + span {
-      border-color: var(--accent);
-      color: var(--accent-ink);
-      background: var(--accent);
-    }
-
-    .format-option input:focus-visible + span {
-      outline: 3px solid color-mix(in oklch, var(--accent) 70%, transparent);
-      outline-offset: 2px;
-    }
-
-    .seed-input {
-      width: 100%;
-      min-height: 50px;
-      padding: 0 13px;
-      border: 1px solid var(--line-strong);
-      border-radius: var(--radius-sm);
-      color: var(--text);
-      background: var(--canvas);
-      font-family: var(--font-mono);
-    }
-
-    .generate-action {
-      display: flex;
-      justify-content: space-between;
+      grid-template-columns: minmax(240px, 1fr) auto minmax(240px, 1fr);
       align-items: center;
-      gap: 16px;
-      margin-top: 18px;
-      padding-top: 18px;
-      border-top: 1px solid var(--line);
-    }
-
-    .generate-hint {
-      max-width: 650px;
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .generate-button {
-      min-width: 180px;
-      padding: 12px 18px;
-    }
-
-    .result-dock {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 18px;
-      align-items: center;
-      min-height: 94px;
-      padding: 17px 18px;
+      min-height: 64px;
+      padding: 9px 11px 9px 26px;
       border: 1px solid var(--line);
-      border-radius: var(--radius-md);
-      background: var(--canvas);
+      border-radius: var(--r-lg);
+      background: var(--nav);
+      box-shadow: 0 14px 38px rgba(0, 0, 0, 0.22);
     }
-
-    .result-kicker {
-      display: block;
-      margin-bottom: 3px;
-      color: var(--dim);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-
-    .result-title {
-      display: block;
-      font-size: 17px;
-    }
-
-    .result-meta {
-      display: block;
-      margin-top: 3px;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 12px;
-    }
-
-    .button-link {
+    .topbar-side { display: flex; min-width: 0; align-items: center; gap: 29px; }
+    .topbar-side:last-child { justify-content: flex-end; }
+    .back-button, .text-button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      color: var(--accent-ink);
-      background: var(--accent);
-      border-color: var(--accent);
-      text-decoration: none;
+      gap: 9px;
+      min-height: 42px;
+      padding: 0 10px;
+      border-color: transparent;
+      background: transparent;
+      font-weight: 500;
     }
-
-    .button-link[hidden] {
-      display: none;
+    .editor-title { min-width: 0; overflow: hidden; font-size: 16px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .exit-button {
+      min-width: 141px;
+      min-height: 42px;
+      padding: 0 22px;
+      border-color: transparent;
+      border-radius: var(--r-pill);
+      color: oklch(78% 0.028 263);
+      background: oklch(24% 0.027 263);
     }
-
-    .privacy-note {
-      margin: 14px 0 0;
-      color: var(--dim);
+    .primary-button {
+      border-color: color-mix(in oklch, var(--blue) 78%, white);
+      color: white;
+      background: var(--blue);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 8px 18px rgba(20, 78, 220, 0.22);
+    }
+    .save-button { min-width: 82px; min-height: 44px; padding: 0 22px; }
+    .danger-button { border-color: var(--red); background: var(--red); }
+    .canvas-shell { position: absolute; z-index: 1; inset: 0; display: flex; overflow: hidden; background: var(--canvas); }
+    .source-pane, .model-pane { position: relative; min-width: 0; height: 100dvh; overflow: hidden; }
+    .source-pane { width: 100%; }
+    .editor.has-result .source-pane, .editor.has-result .model-pane { width: 50%; }
+    .editor.has-result .source-pane::after {
+      position: absolute;
+      z-index: 5;
+      inset: 0;
+      background: linear-gradient(90deg, transparent 58%, rgba(5, 12, 22, 0.3) 100%);
+      content: "";
+      pointer-events: none;
+    }
+    .image-zone {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 120px 24px 180px;
+      cursor: pointer;
+      background: linear-gradient(rgba(8, 17, 29, 0.72), rgba(8, 17, 29, 0.72)), repeating-linear-gradient(135deg, transparent 0 20px, rgba(255, 255, 255, 0.018) 20px 21px);
+    }
+    .image-zone[data-dragging="true"] .empty-upload { border-color: var(--blue); background: color-mix(in oklch, var(--surface) 84%, var(--blue)); transform: translateY(-4px); }
+    .file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .empty-upload {
+      display: grid;
+      place-items: center;
+      width: min(440px, 100%);
+      min-height: 248px;
+      padding: 34px;
+      border: 1px dashed var(--line);
+      border-radius: var(--r-lg);
+      background: var(--nav);
+      text-align: center;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+      transition-property: transform, border-color, background-color;
+      transition-duration: 180ms;
+      transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .empty-upload .upload-icon {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      margin-bottom: 15px;
+      border: 1px solid color-mix(in oklch, var(--blue) 50%, var(--line));
+      border-radius: 50%;
+      color: oklch(78% 0.13 260);
+      background: color-mix(in oklch, var(--raised) 78%, var(--blue));
+    }
+    .empty-upload strong { font-size: 21px; font-weight: 650; }
+    .empty-upload > span { margin-top: 6px; color: var(--muted); }
+    .empty-upload small { margin-top: 18px; color: var(--dim); }
+    .selection-editor, .selection-stage { position: absolute; inset: 0; overflow: hidden; }
+    .selection-stage { cursor: crosshair; background: #111823; }
+    .selection-stage[aria-disabled="true"] { cursor: default; }
+    .selection-stage > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; user-select: none; -webkit-user-drag: none; }
+    .mask-overlay, .point-layer, .annotation-layer { position: absolute; z-index: 3; pointer-events: none; }
+    .point-layer, .annotation-layer { inset: 0; z-index: 4; }
+    .point-marker {
+      position: absolute;
+      width: 13px;
+      height: 13px;
+      border: 2px solid rgba(255, 255, 255, 0.92);
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+      transform: translate(-50%, -50%);
+    }
+    .point-marker[data-label="0"] { background: var(--red); }
+    .point-marker[data-cursor="true"] { width: 18px; height: 18px; background: transparent; }
+    .annotation-label { position: absolute; padding: 3px 8px; border-radius: 5px; color: white; background: rgba(8, 15, 26, 0.78); font-size: 12px; transform: translate(-50%, -50%); }
+    .segment-progress {
+      position: absolute;
+      z-index: 8;
+      top: 112px;
+      left: 50%;
+      padding: 8px 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-pill);
+      color: var(--text);
+      background: var(--nav);
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24);
       font-size: 12px;
+      transform: translateX(-50%);
     }
-
-    .page-footer {
+    .model-pane {
+      display: grid;
+      place-items: center;
+      width: 0;
+      background: radial-gradient(circle at 50% 43%, oklch(31% 0.047 249), oklch(15% 0.03 257) 58%, oklch(11% 0.02 260));
+      outline: 1px solid rgba(255, 255, 255, 0.09);
+      outline-offset: -1px;
+    }
+    .model-stage { position: absolute; inset: 96px 20px 134px; display: grid; place-items: center; overflow: hidden; cursor: grab; }
+    .model-stage:active { cursor: grabbing; }
+    .model-canvas { width: 100%; height: 100%; }
+    .model-fallback {
+      width: 84%;
+      height: 84%;
+      object-fit: contain;
+      filter: sepia(0.7) saturate(0.58) hue-rotate(36deg) brightness(0.95) contrast(1.18) drop-shadow(0 20px 24px rgba(0, 0, 0, 0.48));
+      transform: perspective(900px) rotateY(-9deg) rotateX(2deg);
+    }
+    .model-badge { position: absolute; top: 112px; right: 28px; padding: 6px 10px; border-radius: var(--r-pill); color: var(--muted); background: rgba(8, 15, 26, 0.72); font-size: 11px; }
+    .model-actions { position: absolute; z-index: 16; right: 70px; bottom: 175px; display: flex; gap: 8px; }
+    .button-link, .model-actions button { display: inline-flex; min-height: 41px; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; text-decoration: none; background: oklch(13.5% 0.026 258 / 0.94); }
+    .control-deck {
+      position: fixed;
+      z-index: 15;
+      right: max(150px, calc((100vw - 980px) / 2));
+      bottom: 32px;
+      left: max(150px, calc((100vw - 980px) / 2));
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-rows: 52px 60px;
+      gap: 14px;
+    }
+    .selection-status {
+      grid-column: 1 / -1;
       display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      margin-top: 24px;
-      padding-top: 18px;
-      border-top: 1px solid var(--line);
-      color: var(--dim);
-      font-family: var(--font-mono);
-      font-size: 11px;
+      min-width: 0;
+      align-items: center;
+      gap: 11px;
+      padding: 0 11px 0 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-md);
+      background: var(--nav);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
     }
-
-    .visually-hidden {
-      position: absolute !important;
-      width: 1px !important;
-      height: 1px !important;
-      margin: -1px !important;
-      padding: 0 !important;
-      border: 0 !important;
-      overflow: hidden !important;
-      clip: rect(0 0 0 0) !important;
-      white-space: nowrap !important;
+    .status-spark { width: 18px; height: 18px; flex: 0 0 auto; color: var(--blue); }
+    .upload-validation { min-width: 0; margin: 0 auto 0 0; color: var(--text); font-size: 15px; white-space: nowrap; }
+    .upload-validation[data-tone="bad"] { color: oklch(81% 0.12 25); }
+    .selection-actions { display: flex; align-items: center; gap: 8px; border: 0; margin: 0; padding: 0; }
+    .selection-option { position: relative; }
+    .selection-option input { position: absolute; opacity: 0; pointer-events: none; }
+    .selection-option > span, .generate-button {
+      display: inline-flex;
+      min-width: 132px;
+      min-height: 42px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-md);
+      color: var(--muted);
+      background: var(--raised);
+      cursor: pointer;
+      transition-property: transform, color, background-color, border-color, opacity;
+      transition-duration: 120ms, 160ms, 160ms, 160ms, 160ms;
     }
-
-    @media (max-width: 900px) {
-      .masthead,
-      .endpoint-panel,
-      .endpoint-fields,
-      .console-layout,
-      .generate-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .masthead {
-        align-items: start;
-      }
-
-      .build-stamp {
-        width: fit-content;
-        min-width: 0;
-        text-align: left;
-      }
-
-      .endpoint-actions {
-        justify-content: flex-start;
-      }
-
-      .rail {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        order: 2;
-      }
-
-      .workspace {
-        order: 1;
-      }
-
-      .log-panel {
-        grid-column: 1 / -1;
-      }
+    .selection-option > span:active { transform: scale(0.96); }
+    .selection-option input:focus-visible + span { outline: 3px solid color-mix(in oklch, var(--blue) 72%, transparent); outline-offset: 3px; }
+    .selection-option input:checked + span { border-color: color-mix(in oklch, var(--blue) 74%, white); color: white; background: var(--blue); }
+    .selection-option.subtract input:checked + span { border-color: var(--red); background: var(--red); }
+    .generate-button { min-width: 164px; color: white; background: var(--blue); }
+    .generate-button:disabled { color: var(--dim); background: oklch(12% 0.02 260); }
+    .tool-group, .tool-strip, .ai-control {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 8px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-md);
+      background: var(--nav);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
     }
-
-    @media (max-width: 640px) {
-      .shell {
-        padding-top: 12px;
-      }
-
-      .masthead {
-        gap: 14px;
-        padding-bottom: 18px;
-      }
-
-      h1 {
-        font-size: clamp(36px, 13vw, 54px);
-      }
-
-      .endpoint-actions,
-      .button-row,
-      .selection-toolbar,
-      .editor-footer {
-        align-items: flex-start;
-      }
-
-      .rail,
-      .upload-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .log-panel {
-        grid-column: auto;
-      }
-
-      .drop-zone,
-      .preview-empty,
-      .preview-filled,
-      .preview-filled img,
-      .selection-stage,
-      .selection-stage > img,
-      .mask-zone {
-        min-height: 250px;
-      }
-
-      .selection-toolbar,
-      .editor-footer {
-        flex-direction: column;
-      }
-
-      .selection-actions,
-      .selection-actions button,
-      .editor-footer button {
-        width: 100%;
-      }
-
-      .generate-action,
-      .result-dock,
-      .page-footer {
-        align-items: flex-start;
-        grid-template-columns: 1fr;
-        flex-direction: column;
-      }
-
-      .generate-button {
-        min-width: 0;
-      }
-
-      .result-dock {
-        display: grid;
-      }
-
-      .log-entry {
-        grid-template-columns: auto minmax(0, 1fr);
-      }
-
-      .log-status {
-        grid-column: 2;
-        text-align: left;
-      }
+    .tool-group { grid-column: 1; }
+    .tool-strip { grid-column: 2; overflow-x: auto; scrollbar-width: none; }
+    .tool-strip::-webkit-scrollbar { display: none; }
+    .tool-button { display: grid; width: 44px; min-width: 44px; height: 46px; min-height: 46px; place-items: center; padding: 0; border-color: var(--line); border-radius: 10px; background: var(--raised); }
+    .tool-button[aria-pressed="true"] { border-color: color-mix(in oklch, var(--blue) 68%, var(--line)); color: white; background: color-mix(in oklch, var(--raised) 72%, var(--blue)); }
+    .tool-button .multicolor { color: var(--green); }
+    .tool-button.danger-tool { color: oklch(87% 0.05 25); }
+    .ai-control { grid-column: 3; justify-content: space-between; min-width: 208px; padding: 6px 13px 6px 17px; color: oklch(82% 0.028 263); white-space: nowrap; }
+    .ai-control .status-spark { width: 17px; }
+    .ai-label { display: flex; align-items: center; gap: 10px; }
+    .switch { position: relative; width: 47px; height: 28px; flex: 0 0 auto; }
+    .switch input { position: absolute; opacity: 0; }
+    .switch-track { position: absolute; inset: 0; border-radius: var(--r-pill); background: var(--hover); transition: background-color 160ms ease; }
+    .switch-track::after {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: oklch(93% 0.016 263);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32);
+      content: "";
+      transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
     }
-
+    .switch input:checked + .switch-track { background: var(--blue); }
+    .switch input:checked + .switch-track::after { transform: translateX(19px); }
+    .switch input:focus-visible + .switch-track { outline: 3px solid color-mix(in oklch, var(--blue) 72%, transparent); outline-offset: 3px; }
+    .runtime-notice, .save-toast {
+      position: fixed;
+      z-index: 60;
+      top: 116px;
+      left: 50%;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      width: min(440px, calc(100vw - 32px));
+      min-height: 64px;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 11px 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-md);
+      background: var(--nav);
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
+      transform: translateX(-50%);
+      animation: surface-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .runtime-notice { grid-template-columns: auto minmax(0, 1fr); }
+    .save-toast { width: min(360px, calc(100vw - 32px)); }
+    .notice-mark, .toast-mark { display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--green); background: var(--raised); font-size: 12px; font-weight: 700; }
+    .runtime-notice[data-tone="danger"] .notice-mark { color: var(--red); }
+    .runtime-notice[data-tone="warn"] .notice-mark { color: oklch(78% 0.14 75); }
+    .runtime-notice strong { display: block; line-height: 1.4; }
+    .runtime-notice p { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .toast-action { min-width: 88px; min-height: 40px; padding: 0 14px; }
+    dialog { margin: auto; padding: 0; border: 0; color: var(--text); background: transparent; overflow: visible; }
+    dialog::backdrop { background: rgba(4, 9, 18, 0.55); }
+    .modal-card {
+      width: min(500px, calc(100vw - 32px));
+      padding: 27px 31px 23px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-lg);
+      background: var(--nav);
+      box-shadow: 0 28px 78px rgba(0, 0, 0, 0.52);
+      animation: modal-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .confirm-heading { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 16px; align-items: center; }
+    .modal-icon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 50%; color: white; background: var(--blue); }
+    .modal-icon.error { border: 1px solid var(--line); color: var(--red); background: var(--raised); }
+    .modal-card h2 { margin: 0; font-size: 21px; font-weight: 680; line-height: 1.35; text-wrap: balance; }
+    .modal-card p { margin: 3px 0 0; color: var(--muted); }
+    .credit-row { display: grid; grid-template-columns: repeat(3, 1fr); margin: 24px 0 15px; padding: 12px 18px; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--muted); background: var(--raised); font-variant-numeric: tabular-nums; }
+    .credit-row span:nth-child(2) { text-align: center; }
+    .credit-row span:last-child { color: oklch(68% 0.16 260); text-align: right; }
+    .credit-note { font-size: 12px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 26px; }
+    .modal-actions button { min-width: 142px; min-height: 48px; padding: 0 20px; }
+    .progress-card { width: min(460px, calc(100vw - 32px)); padding: 27px 70px 26px; text-align: center; }
+    .progress-card .modal-icon { margin: 0 auto 17px; border: 1px solid var(--line); background: var(--raised); }
+    .spinner { width: 24px; height: 24px; border: 3px solid var(--line); border-top-color: var(--blue); border-radius: 50%; animation: spin 900ms linear infinite; }
+    .progress-card h2 { font-size: 23px; }
+    .progress-copy { margin-top: 13px !important; }
+    .progress-track { height: 8px; margin: 12px 0 10px; overflow: hidden; border-radius: var(--r-pill); background: var(--raised); }
+    .progress-bar { width: 100%; height: 100%; border-radius: inherit; background: var(--blue); transform: scaleX(0.04); transform-origin: left; animation: generate-progress 14s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    .progress-note { font-size: 12px; }
+    .failure-card { width: min(480px, calc(100vw - 32px)); text-align: center; }
+    .failure-card .modal-icon { margin: 0 auto 16px; }
+    .failure-card h2 { font-size: 23px; }
+    .failure-card .modal-actions { justify-content: center; margin-top: 13px; }
+    .settings-drawer { width: min(470px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); margin: 16px 16px 16px auto; }
+    .settings-drawer::backdrop { background: rgba(4, 9, 18, 0.38); }
+    .drawer-card { max-height: calc(100dvh - 32px); overflow: auto; padding: 22px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--nav); box-shadow: -20px 0 60px rgba(0, 0, 0, 0.4); overscroll-behavior: contain; animation: drawer-in 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+    .drawer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .drawer-heading h2 { margin: 0; font-size: 19px; }
+    .drawer-section { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line-soft); }
+    .field-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 12px; }
+    .endpoint-input, .seed-input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--text); background: var(--surface); }
+    .drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .drawer-actions button { padding: 0 13px; }
+    .status-list { display: grid; gap: 8px; }
+    .status-row { display: grid; grid-template-columns: 9px minmax(0, 1fr); gap: 10px; padding: 9px 0; }
+    .status-dot { width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: var(--dim); }
+    .status-row[data-tone="good"] .status-dot { background: var(--green); }
+    .status-row[data-tone="pending"] .status-dot { background: var(--blue); }
+    .status-row[data-tone="bad"] .status-dot { background: var(--red); }
+    .status-label { display: block; color: var(--dim); font-size: 10px; }
+    .status-value { display: block; font-weight: 620; }
+    .status-detail { display: block; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .format-control { display: flex; flex-wrap: wrap; gap: 8px; }
+    .format-option { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
+    .timer { display: flex; justify-content: space-between; margin-top: 12px; color: var(--muted); }
+    .timer-value { color: var(--text); font-variant-numeric: tabular-nums; }
+    .log-list { max-height: 180px; margin: 10px 0 0; padding: 0; overflow: auto; list-style: none; }
+    .log-entry { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); color: var(--muted); font-size: 10px; }
+    .log-path { overflow-wrap: anywhere; }
+    .log-status { text-align: right; }
+    .log-entry[data-tone="good"] .log-status { color: var(--green); }
+    .log-entry[data-tone="bad"] .log-status { color: var(--red); }
+    .log-empty { color: var(--dim); font-size: 12px; }
+    .auth-notice { margin-top: 12px; padding: 10px; border: 1px solid color-mix(in oklch, var(--red) 50%, var(--line)); border-radius: var(--r-sm); color: oklch(81% 0.09 25); font-size: 12px; }
+    .advanced-grid { display: grid; grid-template-columns: 1fr 120px; gap: 12px; align-items: end; }
+    .sr-data, .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; margin: -1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; border: 0 !important; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes generate-progress { to { transform: scaleX(0.82); } }
+    @keyframes modal-in { from { opacity: 0; transform: scale(0.96) translateY(8px); } }
+    @keyframes surface-in { from { opacity: 0; transform: translateX(-50%) translateY(-10px); } }
+    @keyframes drawer-in { from { opacity: 0; transform: translateX(18px); } }
+    @media (max-width: 920px) {
+      .topbar { top: 14px; right: 14px; left: 14px; grid-template-columns: minmax(0, 1fr) auto; min-height: 58px; padding: 7px 8px 7px 14px; }
+      .topbar-side { gap: 12px; }
+      .topbar > .exit-button { display: none; }
+      .back-button span { display: none; }
+      .save-button { min-width: 70px; min-height: 42px; padding: 0 16px; }
+      .editor.has-result .source-pane { position: absolute; z-index: 4; top: 86px; left: 14px; width: 34%; height: 25%; border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35); }
+      .editor.has-result .model-pane { width: 100%; }
+      .model-stage { inset: 80px 10px 158px; }
+      .model-actions { right: 18px; bottom: 174px; }
+      .model-badge { top: 90px; }
+      .control-deck { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 52px 58px; gap: 8px; }
+      .selection-status { padding-left: 12px; }
+      .upload-validation { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+      .selection-option > span { min-width: 44px; padding: 0 11px; }
+      .selection-option > span .action-copy { display: none; }
+      .generate-button { min-width: 112px; padding: 0 12px; }
+      .ai-control { display: none; }
+    }
+    @media (max-width: 540px) {
+      .editor-title { font-size: 14px; }
+      .topbar-side:first-child { gap: 4px; }
+      .control-deck { grid-template-columns: 146px minmax(0, 1fr); }
+      .status-spark { display: none; }
+      .selection-actions { gap: 5px; }
+      .selection-option > span { min-width: 40px; }
+      .generate-button { min-width: 100px; font-size: 13px; }
+      .tool-group { gap: 4px; padding: 5px; }
+      .tool-button { width: 42px; min-width: 42px; height: 46px; }
+      .modal-card { padding: 24px 20px 20px; }
+      .progress-card { padding: 27px 24px 24px; }
+      .modal-actions button { min-width: 0; flex: 1; }
+      .credit-row { padding: 11px 12px; font-size: 12px; }
+      .advanced-grid { grid-template-columns: 1fr; }
+    }
     @media (prefers-reduced-motion: reduce) {
-      *,
-      *::before,
-      *::after {
-        scroll-behavior: auto !important;
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
-      }
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
     }
   </style>
 </head>
 <body>
-  <a class="skip-link" href="#main-content">跳到测试区域</a>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute">
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v5h14v-5"/></symbol>
+    <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 3v13a2 2 0 0 0 2 2h13M3 6h13a2 2 0 0 1 2 2v13"/></symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 7v5h-5M19 12a7 7 0 1 1-2.1-5"/><path d="m20 7-3-3"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10m4 0h2M4 17h3m4 0h9M14 4v6M7 14v6"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.8 13.8 9l4.4 1.8-4.4 1.8L12 19l-1.8-6.4-4.4-1.8L10.2 9 12 2.8Z"/><path d="m18.5 16 .7 2.3 1.8.7-1.8.7-.7 2.3-.7-2.3-1.8-.7 1.8-.7.7-2.3Z"/></symbol>
+    <symbol id="i-point" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.5"/></symbol>
+    <symbol id="i-brush" viewBox="0 0 24 24"><path d="m4 20 14-14 2 2L6 22H4v-2Z"/><path d="m15.5 8.5 2 2"/></symbol>
+    <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+    <symbol id="i-lasso" viewBox="0 0 24 24"><path d="M19 12c0 4-3.2 7-7.4 7S4 16 4 12s3.4-7 7.6-7S19 8 19 12Z"/><path d="M11.5 19.1c-1.2 2.5-4.4 2.5-4.5.5-.1-1.5 2.1-2.1 4.5-.5Z"/></symbol>
+    <symbol id="i-polygon" viewBox="0 0 24 24"><path d="m5 18 3-12 11 1-4 11H5Z"/><circle cx="8" cy="6" r="1"/><circle cx="19" cy="7" r="1"/><circle cx="15" cy="18" r="1"/><circle cx="5" cy="18" r="1"/></symbol>
+    <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/></symbol>
+    <symbol id="i-ellipse" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9" ry="6"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 5h14M12 5v14M8.5 19h7"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3m2 0-1 14H8L7 7m4 4v6m3-6v6"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 8 5 12l4 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14"/></symbol>
+    <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M8 20H4v-4m12 4h4v-4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-credit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8m-3-4h6"/></symbol>
+    <symbol id="i-error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v6m0 4h.01"/></symbol>
+  </svg>
 
-  <div class="shell">
-    <header class="masthead">
-      <div>
-        <p class="eyebrow">FC GPU Runtime Console</p>
-        <h1>SAM 3D / 对象生成探针</h1>
-        <p class="subtitle">上传图片后用加选点与减选点实时获得对象 Mask，再将确认后的 Mask 交给同一个 FC 函数生成 3D。两个模型由 FC Initializer 在实例启动阶段预热，页面不提供手动加载入口。</p>
+  <a class="skip-link" href="#main-content">跳到编辑区域</a>
+  <main class="editor" id="main-content">
+    <header class="topbar">
+      <div class="topbar-side">
+        <button class="back-button" id="back-button" type="button" aria-label="返回"><svg class="icon"><use href="#i-back"/></svg><span>返回</span></button>
+        <strong class="editor-title" id="editor-title">编辑：叶片表皮</strong>
       </div>
-      <div class="build-stamp" aria-label="客户端信息">
-        <strong>CLIENT 01</strong>
-        BROWSER / DIRECT<br>
-        SEQUENTIAL PROBE
-      </div>
+      <button class="exit-button" id="exit-button" type="button">退出编辑模式</button>
+      <div class="topbar-side"><button class="primary-button save-button" id="save-button" type="button">保存</button></div>
     </header>
 
-    <section class="endpoint-panel" aria-labelledby="endpoint-title">
-      <div class="endpoint-fields">
-        <div>
-          <label class="field-label" id="endpoint-title" for="service-endpoint">SAM3 / SAM3D 组合函数地址</label>
-          <input
-            class="endpoint-input"
-            id="service-endpoint"
-            type="url"
-            inputmode="url"
-            spellcheck="false"
-            autocomplete="url"
-            value="https://samd-object-duanxppffx.cn-shenzhen.fcapp.run"
-          >
+    <section class="canvas-shell" aria-label="对象编辑工作区">
+      <div class="source-pane" id="source-pane">
+        <label class="image-zone" id="image-zone" for="image-input" data-kind="image">
+          <input class="file-input" id="image-input" type="file" accept="image/*">
+          <span class="empty-upload"><span class="upload-icon"><svg class="icon"><use href="#i-upload"/></svg></span><strong>选择一张微生物图片</strong><span>拖放图片到此处，或点击从设备上传</span><small>支持常见图片格式，单文件不超过 20 MB</small></span>
+        </label>
+        <div class="selection-editor" id="image-filled" hidden>
+          <div class="selection-stage" id="selection-stage" role="application" tabindex="0" aria-label="对象点选画布" aria-keyshortcuts="Enter Space ArrowUp ArrowDown ArrowLeft ArrowRight">
+            <img id="image-preview" alt="可点选的输入图片" width="1280" height="800" draggable="false">
+            <canvas class="mask-overlay" id="mask-overlay" aria-hidden="true"></canvas>
+            <div class="point-layer" id="point-layer" aria-hidden="true"></div>
+            <div class="annotation-layer" id="annotation-layer" aria-hidden="true"></div>
+            <span class="segment-progress" id="segment-progress" hidden>正在识别选区</span>
+          </div>
         </div>
       </div>
-      <div class="endpoint-actions">
-        <button class="primary-button" id="check-button" type="button">顺序检查</button>
-        <button id="open-service-button" type="button">打开组合服务</button>
-      </div>
-      <p class="endpoint-note">顺序检查只读取一个函数内两个模型的健康与预热状态，不触发模型加载。地址只保存在当前浏览器的 localStorage 中。</p>
+      <section class="model-pane" id="model-pane" aria-label="生成的 3D 模型" hidden>
+        <div class="model-stage" id="model-stage" tabindex="0" aria-label="可拖动旋转的 3D 模型预览"><canvas class="model-canvas" id="model-canvas" hidden></canvas><img class="model-fallback" id="model-fallback" alt="根据选区生成的模型预览" width="640" height="640" hidden></div>
+        <span class="model-badge" id="model-badge">拖动旋转 · 滚轮缩放</span>
+        <div class="model-actions"><a class="button-link" id="download-link" href="#" download hidden><svg class="icon"><use href="#i-download"/></svg>下载3D</a><button id="fullscreen-button" type="button"><svg class="icon"><use href="#i-fullscreen"/></svg>全屏</button></div>
+      </section>
     </section>
 
-    <div class="notices" aria-live="polite">
-      <aside class="notice" id="auth-notice" data-tone="danger" role="alert" hidden>
-        <span class="notice-mark">AUTH</span>
-        <div>
-          <strong>当前 HTTP 触发器启用了函数鉴权</strong>
-          <p>浏览器测试页不能安全保存 AccessKey，也不能替你生成 FC 签名。临时测试时可将触发器鉴权改为匿名，测试完成后立即恢复；生产环境请通过服务端签名代理调用。</p>
-        </div>
-      </aside>
-      <aside class="notice" id="runtime-notice" data-tone="info" role="status" hidden>
-        <span class="notice-mark" id="runtime-notice-mark">INFO</span>
-        <div>
-          <strong id="runtime-notice-title">提示</strong>
-          <p id="runtime-notice-copy"></p>
-        </div>
-      </aside>
-    </div>
-
-    <main class="console-layout" id="main-content">
-      <aside class="rail" aria-label="运行状态与操作">
-        <section class="panel">
-          <div class="panel-header">
-            <h2>运行状态</h2>
-            <span class="section-index">LIVE</span>
-          </div>
-          <div class="panel-body">
-            <div class="status-list">
-              <div class="status-row" id="status-segment" data-tone="unknown">
-                <span class="status-dot" aria-hidden="true"></span>
-                <div>
-                  <span class="status-label">SAM3 SEGMENTER</span>
-                  <span class="status-value">尚未检查</span>
-                  <span class="status-detail">GET /healthz + /readyz</span>
-                </div>
-              </div>
-              <div class="status-row" id="status-service" data-tone="unknown">
-                <span class="status-dot" aria-hidden="true"></span>
-                <div>
-                  <span class="status-label">SAM3D SERVICE</span>
-                  <span class="status-value">尚未检查</span>
-                  <span class="status-detail">GET /healthz</span>
-                </div>
-              </div>
-              <div class="status-row" id="status-gpu" data-tone="unknown">
-                <span class="status-dot" aria-hidden="true"></span>
-                <div>
-                  <span class="status-label">GPU / CUDA</span>
-                  <span class="status-value">尚未检查</span>
-                  <span class="status-detail">GET /gpu</span>
-                </div>
-              </div>
-              <div class="status-row" id="status-checkpoint" data-tone="unknown">
-                <span class="status-dot" aria-hidden="true"></span>
-                <div>
-                  <span class="status-label">CHECKPOINT</span>
-                  <span class="status-value">尚未检查</span>
-                  <span class="status-detail">GET /readyz</span>
-                </div>
-              </div>
-              <div class="status-row" id="status-model" data-tone="unknown">
-                <span class="status-dot" aria-hidden="true"></span>
-                <div>
-                  <span class="status-label">SAM3D WARM STATE</span>
-                  <span class="status-value">尚未检查</span>
-                  <span class="status-detail">等待 FC Initializer 预热</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header">
-            <h2>当前操作</h2>
-            <span class="section-index">INITIALIZER</span>
-          </div>
-          <div class="panel-body">
-            <p class="operation-copy">模型加载由 FC Initializer 在实例接收请求前完成。本页只显示请求耗时，不会通过 HTTP 接口手动加载模型。</p>
-            <div class="button-row">
-              <button class="danger-button" id="cancel-button" type="button" hidden>取消浏览器等待</button>
-            </div>
-            <div class="timer" aria-label="当前操作耗时">
-              <span class="timer-label">ELAPSED</span>
-              <span class="timer-value" id="timer">00:00.0</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel log-panel">
-          <div class="panel-header">
-            <h2>请求日志</h2>
-            <button class="quiet-button" id="clear-log-button" type="button">清空</button>
-          </div>
-          <ol class="log-list" id="log-list">
-            <li class="log-empty" id="log-empty">尚无请求。先点击“顺序检查”。</li>
-          </ol>
-        </section>
-      </aside>
-
-      <div class="workspace">
-        <section class="panel" aria-labelledby="source-title">
-          <div class="panel-header">
-            <h2 id="source-title">点选对象并生成 Mask</h2>
-            <span class="section-index">01 / SEGMENT</span>
-          </div>
-          <div class="panel-body">
-            <div class="selection-toolbar">
-              <fieldset class="selection-tools">
-                <legend class="field-label">点选模式</legend>
-                <div class="format-control" aria-label="点选模式">
-                  <label class="format-option">
-                    <input type="radio" name="selection-mode" value="1" checked>
-                    <span>＋ 加选</span>
-                  </label>
-                  <label class="format-option">
-                    <input type="radio" name="selection-mode" value="0">
-                    <span>－ 减选</span>
-                  </label>
-                </div>
-              </fieldset>
-              <div class="selection-actions">
-                <button id="undo-point-button" type="button" disabled>撤销上一点</button>
-                <button class="quiet-button" id="clear-points-button" type="button" disabled>清除选择</button>
-              </div>
-            </div>
-
-            <div class="upload-grid">
-              <div class="source-pane">
-                <label class="drop-zone" id="image-zone" for="image-input" data-kind="image">
-                  <input class="file-input" id="image-input" type="file" accept="image/*">
-                  <span class="preview-empty" id="image-empty">
-                    <span class="preview-copy">
-                      <strong>选择输入图片</strong>
-                      <span>点击或拖入 RGB / RGBA 图片</span>
-                    </span>
-                  </span>
-                </label>
-                <div class="selection-editor" id="image-filled" hidden>
-                  <div
-                    class="selection-stage"
-                    id="selection-stage"
-                    role="button"
-                    tabindex="0"
-                    aria-label="在图片中添加当前模式的对象点"
-                    aria-describedby="selection-help upload-validation"
-                    aria-keyshortcuts="Enter Space ArrowUp ArrowDown ArrowLeft ArrowRight"
-                    aria-disabled="false"
-                  >
-                    <img id="image-preview" alt="可点选的输入图片" width="640" height="480" draggable="false">
-                    <canvas class="mask-overlay" id="mask-overlay" aria-hidden="true"></canvas>
-                    <div class="point-layer" id="point-layer" aria-hidden="true"></div>
-                    <span class="segment-progress" id="segment-progress" hidden>更新 MASK…</span>
-                  </div>
-                  <div class="editor-footer">
-                    <span class="file-meta" id="image-meta"></span>
-                    <button id="replace-image-button" type="button">更换图片</button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="mask-zone" id="mask-zone" aria-label="当前 Mask 预览">
-                <span class="preview-empty" id="mask-empty">
-                  <span class="preview-copy">
-                    <strong>等待对象点</strong>
-                    <span>在左侧图片中加选目标，减选背景</span>
-                  </span>
-                </span>
-                <span class="preview-filled" id="mask-filled" hidden>
-                  <img id="mask-preview" alt="函数返回的二值对象 Mask" width="640" height="480">
-                  <span class="file-meta" id="mask-meta"></span>
-                </span>
-              </div>
-            </div>
-
-            <div class="upload-rules" aria-label="上传限制">
-              <span>单文件 ≤ 20 MB</span>
-              <span>两文件合计 ≤ 30 MB</span>
-              <span>单图 ≤ 4000 万像素</span>
-              <span>绿色点加选，红色点减选</span>
-            </div>
-            <p class="selection-help" id="selection-help">鼠标或触控点击可添加点。键盘聚焦图片后，用方向键移动光标，Enter 或空格添加当前模式的点。</p>
-            <p class="upload-validation" id="upload-validation" aria-live="polite">等待选择输入图片。</p>
-          </div>
-        </section>
-
-        <section class="panel" aria-labelledby="generation-title">
-          <div class="panel-header">
-            <h2 id="generation-title">生成参数</h2>
-            <span class="section-index">02 / INFERENCE</span>
-          </div>
-          <div class="panel-body">
-            <div class="generate-grid">
-              <fieldset style="margin: 0; padding: 0; border: 0;">
-                <legend class="field-label">输出格式</legend>
-                <div class="format-control">
-                  <label class="format-option">
-                    <input type="radio" name="output-format" value="ply" checked>
-                    <span>PLY</span>
-                  </label>
-                  <label class="format-option">
-                    <input type="radio" name="output-format" value="glb">
-                    <span>GLB</span>
-                  </label>
-                </div>
-              </fieldset>
-              <div>
-                <label class="field-label" for="seed">随机种子</label>
-                <input class="seed-input" id="seed" type="number" min="0" max="2147483647" step="1" value="42">
-              </div>
-            </div>
-            <div class="generate-action">
-              <p class="generate-hint">只有最新点选对应的 Mask 返回后才可生成。若函数实例尚未完成 Initializer 预热，服务会返回 503，不会在请求中临时加载模型。</p>
-              <button class="primary-button generate-button" id="generate-button" type="button" disabled>生成 3D 文件</button>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel" aria-labelledby="result-heading">
-          <div class="panel-header">
-            <h2 id="result-heading">生成结果</h2>
-            <span class="section-index">03 / ARTIFACT</span>
-          </div>
-          <div class="panel-body">
-            <div class="result-dock">
-              <div>
-                <span class="result-kicker">LATEST OUTPUT</span>
-                <strong class="result-title" id="result-title">尚无生成结果</strong>
-                <span class="result-meta" id="result-meta">完成推理后可在这里下载 PLY 或 GLB 文件。</span>
-              </div>
-              <div class="result-actions">
-                <a class="button-link" id="download-link" href="#" download hidden>下载结果</a>
-              </div>
-            </div>
-            <p class="privacy-note">原图与点位会发送到 Mask 分割函数；原图与最新 Mask 会发送到 3D 生成函数。生成文件仅保留在当前页面内存中，刷新页面后下载链接失效。</p>
-          </div>
-        </section>
+    <section class="control-deck" aria-label="编辑工具">
+      <div class="selection-status">
+        <svg class="icon status-spark"><use href="#i-spark"/></svg><p class="upload-validation" id="upload-validation" aria-live="polite">请先上传图片</p>
+        <fieldset class="selection-actions" aria-label="选区模式">
+          <label class="selection-option"><input type="radio" name="selection-mode" value="1" checked><span><svg class="icon"><use href="#i-plus"/></svg><span class="action-copy">增加选区</span></span></label>
+          <label class="selection-option subtract"><input type="radio" name="selection-mode" value="0"><span><svg class="icon"><use href="#i-minus"/></svg><span class="action-copy">减少选区</span></span></label>
+          <button class="primary-button generate-button" id="generate-button" type="button" disabled>生成 3D 模型</button>
+        </fieldset>
       </div>
-    </main>
+      <div class="tool-group" aria-label="文件和服务工具">
+        <button class="tool-button" id="replace-image-button" type="button" aria-label="更换图片" title="更换图片"><svg class="icon"><use href="#i-crop"/></svg></button>
+        <button class="tool-button" id="rotate-button" type="button" aria-label="顺时针旋转图片" title="顺时针旋转图片"><svg class="icon"><use href="#i-rotate"/></svg></button>
+        <button class="tool-button" id="settings-button" type="button" aria-label="服务设置" title="服务设置"><svg class="icon"><use href="#i-sliders"/></svg></button>
+      </div>
+      <div class="tool-strip" id="tool-strip" aria-label="选区工具">
+        <button class="tool-button" type="button" data-tool="smart" aria-label="AI 智能点选" aria-pressed="true" title="AI 智能点选"><svg class="icon multicolor"><use href="#i-spark"/></svg></button>
+        <button class="tool-button" type="button" data-tool="point" aria-label="点选工具" aria-pressed="false" title="点选工具"><svg class="icon"><use href="#i-point"/></svg></button>
+        <button class="tool-button" type="button" data-tool="brush" aria-label="笔刷点选" aria-pressed="false" title="笔刷点选"><svg class="icon"><use href="#i-brush"/></svg></button>
+        <button class="tool-button" type="button" data-tool="circle" aria-label="圆形选区" aria-pressed="false" title="圆形选区"><svg class="icon"><use href="#i-circle"/></svg></button>
+        <button class="tool-button" type="button" data-tool="lasso" aria-label="套索选区" aria-pressed="false" title="套索选区"><svg class="icon"><use href="#i-lasso"/></svg></button>
+        <button class="tool-button" type="button" data-tool="polygon" aria-label="多边形选区" aria-pressed="false" title="多边形选区"><svg class="icon"><use href="#i-polygon"/></svg></button>
+        <button class="tool-button" type="button" data-tool="rectangle" aria-label="矩形选区" aria-pressed="false" title="矩形选区"><svg class="icon"><use href="#i-rect"/></svg></button>
+        <button class="tool-button" type="button" data-tool="ellipse" aria-label="椭圆选区" aria-pressed="false" title="椭圆选区"><svg class="icon"><use href="#i-ellipse"/></svg></button>
+        <button class="tool-button" type="button" data-tool="text" aria-label="文字标注" aria-pressed="false" title="文字标注"><svg class="icon"><use href="#i-text"/></svg></button>
+        <button class="tool-button danger-tool" id="clear-points-button" type="button" aria-label="清除选择" title="清除选择" disabled><svg class="icon"><use href="#i-trash"/></svg></button>
+        <button class="tool-button" id="undo-point-button" type="button" aria-label="撤销上一点" title="撤销上一点" disabled><svg class="icon"><use href="#i-undo"/></svg></button>
+      </div>
+      <div class="ai-control"><span class="ai-label"><svg class="icon status-spark"><use href="#i-spark"/></svg>AI 捕捉微生物</span><label class="switch" aria-label="开启或关闭 AI 捕捉"><input id="ai-toggle" type="checkbox" checked><span class="switch-track"></span></label></div>
+    </section>
 
-    <footer class="page-footer">
-      <span>LOCAL TEST CLIENT / NO CLOUD CREDENTIAL STORAGE</span>
-      <span id="footer-endpoint">SERVICE: NOT SET</span>
-    </footer>
-  </div>
+    <aside class="runtime-notice" id="runtime-notice" data-tone="info" role="status" aria-live="polite" hidden><span class="notice-mark" id="runtime-notice-mark">INFO</span><span><strong id="runtime-notice-title">提示</strong><p id="runtime-notice-copy"></p></span></aside>
+    <aside class="save-toast" id="save-toast" role="status" hidden><span class="toast-mark"><svg class="icon"><use href="#i-check"/></svg></span><span>已保存为模型</span><button class="primary-button toast-action" id="view-saved-button" type="button">点击查看</button></aside>
+    <div class="sr-data" aria-hidden="true">
+      <span id="image-meta"></span><div id="mask-zone"><span id="mask-empty"></span><span id="mask-filled" hidden><img id="mask-preview" alt="函数返回的二值对象 Mask" width="1280" height="800"><span id="mask-meta"></span></span></div>
+      <strong id="result-title">尚无生成结果</strong><span id="result-meta">完成推理后可下载 PLY 或 GLB 文件。</span><span id="footer-endpoint">SERVICE: NOT SET</span>
+    </div>
+  </main>
+
+  <dialog id="credit-dialog" aria-labelledby="credit-title"><div class="modal-card">
+    <div class="confirm-heading"><span class="modal-icon"><svg class="icon"><use href="#i-credit"/></svg></span><span><h2 id="credit-title">确认生成 3D 模型</h2><p>本次转换将消耗 15 积分</p></span></div>
+    <div class="credit-row" aria-label="积分变化"><span>当前 <strong id="credit-current">635</strong></span><span>本次 -15</span><span>转换后 <strong id="credit-after">620</strong></span></div>
+    <p class="credit-note">确认后将扣除积分并开始生成，取消不会扣除。</p>
+    <div class="modal-actions"><button id="cancel-generate-button" type="button">取消</button><button class="primary-button" id="confirm-generate-button" type="button">确认转换</button></div>
+  </div></dialog>
+  <dialog id="generating-dialog" aria-labelledby="generating-title"><div class="modal-card progress-card">
+    <span class="modal-icon"><span class="spinner" aria-hidden="true"></span></span><h2 id="generating-title">正在生成 3D 模型</h2><p class="progress-copy">正在重建微生物的细节与深度信息</p><div class="progress-track" aria-hidden="true"><div class="progress-bar"></div></div><p class="progress-note">正在生成，请勿关闭页面</p>
+  </div></dialog>
+  <dialog id="failure-dialog" aria-labelledby="failure-title"><div class="modal-card failure-card">
+    <span class="modal-icon error"><svg class="icon"><use href="#i-error"/></svg></span><h2 id="failure-title">3D 模型生成失败</h2><p id="failure-copy">生成过程未能完成，请检查网络后重新尝试</p><div class="modal-actions"><button id="return-edit-button" type="button">返回编辑</button><button class="primary-button" id="retry-generate-button" type="button">重新生成</button></div>
+  </div></dialog>
+
+  <dialog class="settings-drawer" id="settings-drawer" aria-labelledby="settings-title"><div class="drawer-card">
+    <div class="drawer-heading"><h2 id="settings-title">服务设置</h2><button class="tool-button" id="close-settings-button" type="button" aria-label="关闭设置"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <section class="drawer-section"><label class="field-label" for="service-endpoint">SAM3 / SAM3D 组合函数地址</label><input class="endpoint-input" id="service-endpoint" type="url" value="https://samd-object-duanxppffx.cn-shenzhen.fcapp.run" autocomplete="url" spellcheck="false"><div class="drawer-actions"><button class="primary-button" id="check-button" type="button">顺序检查</button><button id="open-service-button" type="button">打开组合服务</button><button id="cancel-button" type="button" hidden>取消浏览器等待</button></div><p class="auth-notice" id="auth-notice" role="alert" hidden>FC HTTP 触发器阻止了匿名访问，请检查触发器鉴权配置。</p></section>
+    <section class="drawer-section"><div class="status-list">
+      <div class="status-row" id="status-segment" data-tone="unknown"><span class="status-dot"></span><span><span class="status-label">SAM3 SEGMENTER</span><span class="status-value">尚未检查</span><span class="status-detail">GET /healthz + /readyz</span></span></div>
+      <div class="status-row" id="status-service" data-tone="unknown"><span class="status-dot"></span><span><span class="status-label">SAM3D SERVICE</span><span class="status-value">尚未检查</span><span class="status-detail">GET /healthz</span></span></div>
+      <div class="status-row" id="status-gpu" data-tone="unknown"><span class="status-dot"></span><span><span class="status-label">GPU / CUDA</span><span class="status-value">尚未检查</span><span class="status-detail">GET /gpu</span></span></div>
+      <div class="status-row" id="status-checkpoint" data-tone="unknown"><span class="status-dot"></span><span><span class="status-label">CHECKPOINT</span><span class="status-value">尚未检查</span><span class="status-detail">GET /readyz</span></span></div>
+      <div class="status-row" id="status-model" data-tone="unknown"><span class="status-dot"></span><span><span class="status-label">SAM3D WARM STATE</span><span class="status-value">尚未检查</span><span class="status-detail">等待 FC Initializer 预热</span></span></div>
+    </div><div class="timer"><span>当前操作耗时</span><span class="timer-value" id="timer">00:00.0</span></div></section>
+    <section class="drawer-section advanced-grid"><fieldset style="border:0;margin:0;padding:0"><legend class="field-label">输出格式</legend><div class="format-control"><label class="format-option"><input type="radio" name="output-format" value="ply" checked>PLY</label><label class="format-option"><input type="radio" name="output-format" value="glb">GLB</label></div></fieldset><label><span class="field-label">随机种子</span><input class="seed-input" id="seed" type="number" min="0" max="2147483647" step="1" value="42"></label></section>
+    <section class="drawer-section"><div class="drawer-heading"><span>请求日志</span><button id="clear-log-button" type="button">清空</button></div><ol class="log-list" id="log-list"><li class="log-empty" id="log-empty">尚无请求。先点击“顺序检查”。</li></ol></section>
+  </div></dialog>
 
   <div class="visually-hidden" id="live-region" aria-live="polite" aria-atomic="true"></div>
-
   <script>
     "use strict";
 
@@ -1440,8 +622,21 @@
     const MAX_REQUEST_BYTES = 30 * 1024 * 1024;
     const MAX_IMAGE_PIXELS = 40_000_000;
     const MAX_LOG_ENTRIES = 30;
+    const GENERATION_COST = 15;
 
     const elements = {
+      editor: document.querySelector("#main-content"),
+      editorTitle: document.querySelector("#editor-title"),
+      backButton: document.querySelector("#back-button"),
+      exitButton: document.querySelector("#exit-button"),
+      saveButton: document.querySelector("#save-button"),
+      sourcePane: document.querySelector("#source-pane"),
+      modelPane: document.querySelector("#model-pane"),
+      modelStage: document.querySelector("#model-stage"),
+      modelCanvas: document.querySelector("#model-canvas"),
+      modelFallback: document.querySelector("#model-fallback"),
+      modelBadge: document.querySelector("#model-badge"),
+      fullscreenButton: document.querySelector("#fullscreen-button"),
       serviceEndpoint: document.querySelector("#service-endpoint"),
       checkButton: document.querySelector("#check-button"),
       openServiceButton: document.querySelector("#open-service-button"),
@@ -1458,7 +653,7 @@
       imageInput: document.querySelector("#image-input"),
       imageZone: document.querySelector("#image-zone"),
       maskZone: document.querySelector("#mask-zone"),
-      imageEmpty: document.querySelector("#image-empty"),
+      imageEmpty: document.querySelector(".empty-upload"),
       maskEmpty: document.querySelector("#mask-empty"),
       imageFilled: document.querySelector("#image-filled"),
       maskFilled: document.querySelector("#mask-filled"),
@@ -1467,18 +662,36 @@
       selectionStage: document.querySelector("#selection-stage"),
       maskOverlay: document.querySelector("#mask-overlay"),
       pointLayer: document.querySelector("#point-layer"),
+      annotationLayer: document.querySelector("#annotation-layer"),
       segmentProgress: document.querySelector("#segment-progress"),
       undoPointButton: document.querySelector("#undo-point-button"),
       clearPointsButton: document.querySelector("#clear-points-button"),
       replaceImageButton: document.querySelector("#replace-image-button"),
+      rotateButton: document.querySelector("#rotate-button"),
+      settingsButton: document.querySelector("#settings-button"),
+      closeSettingsButton: document.querySelector("#close-settings-button"),
+      settingsDrawer: document.querySelector("#settings-drawer"),
       imageMeta: document.querySelector("#image-meta"),
       maskMeta: document.querySelector("#mask-meta"),
       uploadValidation: document.querySelector("#upload-validation"),
+      aiToggle: document.querySelector("#ai-toggle"),
       seed: document.querySelector("#seed"),
       generateButton: document.querySelector("#generate-button"),
       resultTitle: document.querySelector("#result-title"),
       resultMeta: document.querySelector("#result-meta"),
       downloadLink: document.querySelector("#download-link"),
+      creditDialog: document.querySelector("#credit-dialog"),
+      creditCurrent: document.querySelector("#credit-current"),
+      creditAfter: document.querySelector("#credit-after"),
+      cancelGenerateButton: document.querySelector("#cancel-generate-button"),
+      confirmGenerateButton: document.querySelector("#confirm-generate-button"),
+      generatingDialog: document.querySelector("#generating-dialog"),
+      failureDialog: document.querySelector("#failure-dialog"),
+      failureCopy: document.querySelector("#failure-copy"),
+      returnEditButton: document.querySelector("#return-edit-button"),
+      retryGenerateButton: document.querySelector("#retry-generate-button"),
+      saveToast: document.querySelector("#save-toast"),
+      viewSavedButton: document.querySelector("#view-saved-button"),
       liveRegion: document.querySelector("#live-region"),
       footerEndpoint: document.querySelector("#footer-endpoint")
     };
@@ -1490,6 +703,7 @@
       operationStartedAt: 0,
       uploads: { image: null, mask: null },
       points: [],
+      annotations: [],
       pointsRevision: 0,
       maskRevision: -1,
       segmentBusy: false,
@@ -1498,8 +712,18 @@
       segmentError: null,
       keyboardCursor: null,
       keyboardMode: false,
+      activeTool: "smart",
       resultUrl: null,
-      logCount: 0
+      resultBlob: null,
+      resultFormat: null,
+      modelPoints: null,
+      modelRotation: { x: -0.12, y: -0.32 },
+      modelZoom: 1,
+      modelDrag: null,
+      credits: 635,
+      logCount: 0,
+      noticeTimer: null,
+      saveTimer: null
     };
 
     class ApiError extends Error {
@@ -1515,23 +739,29 @@
 
     function announce(message) {
       elements.liveRegion.textContent = "";
-      window.setTimeout(() => {
-        elements.liveRegion.textContent = message;
-      }, 20);
+      window.setTimeout(() => { elements.liveRegion.textContent = message; }, 20);
     }
 
-    function endpointElement() {
-      return elements.serviceEndpoint;
+    function openDialog(dialog) {
+      if (dialog.open) return;
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
     }
+
+    function closeDialog(dialog) {
+      if (!dialog.open) return;
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
+
+    function endpointElement() { return elements.serviceEndpoint; }
 
     function normalizeEndpoint(kind) {
       const input = endpointElement(kind);
       const raw = input.value.trim();
       if (!raw) throw new Error("请填写函数地址");
       const url = new URL(raw);
-      if (url.protocol !== "https:" && url.protocol !== "http:") {
-        throw new Error("地址必须使用 http:// 或 https://");
-      }
+      if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("地址必须使用 http:// 或 https://");
       url.search = "";
       url.hash = "";
       url.pathname = url.pathname.replace(/\/+$/, "");
@@ -1577,16 +807,36 @@
       updateEndpointDisplay();
     }
 
+    function loadCredits() {
+      try {
+        const raw = window.localStorage.getItem("sam3d-demo-credits");
+        const stored = raw === null ? Number.NaN : Number(raw);
+        state.credits = Number.isInteger(stored) && stored >= 0 ? stored : 635;
+      } catch (error) {
+        state.credits = 635;
+      }
+      updateCreditPreview();
+    }
+
+    function updateCreditPreview() {
+      elements.creditCurrent.textContent = String(state.credits);
+      elements.creditAfter.textContent = String(Math.max(0, state.credits - GENERATION_COST));
+      elements.confirmGenerateButton.disabled = state.credits < GENERATION_COST;
+    }
+
     function showRuntimeNotice(title, copy, tone = "info") {
+      window.clearTimeout(state.noticeTimer);
       elements.runtimeNotice.dataset.tone = tone;
       elements.runtimeNoticeMark.textContent = tone === "danger" ? "ERROR" : tone === "warn" ? "WARN" : "INFO";
       elements.runtimeNoticeTitle.textContent = title;
       elements.runtimeNoticeCopy.textContent = copy;
       elements.runtimeNotice.hidden = false;
       announce(`${title}。${copy}`);
+      state.noticeTimer = window.setTimeout(() => { elements.runtimeNotice.hidden = true; }, tone === "danger" ? 7000 : 4200);
     }
 
     function hideRuntimeNotice() {
+      window.clearTimeout(state.noticeTimer);
       elements.runtimeNotice.hidden = true;
     }
 
@@ -1616,7 +866,7 @@
       elements.checkButton.disabled = isBusy;
       elements.openServiceButton.disabled = isBusy;
       elements.cancelButton.hidden = !isBusy;
-      elements.selectionStage.setAttribute("aria-disabled", String(isBusy));
+      elements.selectionStage.setAttribute("aria-disabled", String(isBusy || !elements.aiToggle.checked));
       updateSelectionActions();
       updateGenerateAvailability();
     }
@@ -1625,17 +875,13 @@
       state.operationStartedAt = performance.now();
       window.clearInterval(state.timerId);
       elements.timer.textContent = "00:00.0";
-      state.timerId = window.setInterval(() => {
-        elements.timer.textContent = formatElapsed(performance.now() - state.operationStartedAt);
-      }, 100);
+      state.timerId = window.setInterval(() => { elements.timer.textContent = formatElapsed(performance.now() - state.operationStartedAt); }, 100);
     }
 
     function stopTimer() {
       window.clearInterval(state.timerId);
       state.timerId = null;
-      if (state.operationStartedAt) {
-        elements.timer.textContent = formatElapsed(performance.now() - state.operationStartedAt);
-      }
+      if (state.operationStartedAt) elements.timer.textContent = formatElapsed(performance.now() - state.operationStartedAt);
     }
 
     function logRequest({ method, path, status, elapsed, tone, requestId }) {
@@ -1643,28 +889,21 @@
         elements.logEmpty.remove();
         elements.logEmpty = null;
       }
-
       const item = document.createElement("li");
       item.className = "log-entry";
       item.dataset.tone = tone;
-
       const time = document.createElement("span");
       time.className = "log-time";
       time.textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-
       const pathNode = document.createElement("span");
       pathNode.className = "log-path";
-      const requestSuffix = requestId ? ` · ${requestId}` : "";
-      pathNode.textContent = `${method} ${path}${requestSuffix}`;
-
+      pathNode.textContent = `${method} ${path}${requestId ? ` · ${requestId}` : ""}`;
       const statusNode = document.createElement("span");
       statusNode.className = "log-status";
       statusNode.textContent = `${status} · ${formatElapsed(elapsed)}`;
-
       item.append(time, pathNode, statusNode);
       elements.logList.prepend(item);
       state.logCount += 1;
-
       while (state.logCount > MAX_LOG_ENTRIES && elements.logList.lastElementChild) {
         elements.logList.lastElementChild.remove();
         state.logCount -= 1;
@@ -1684,11 +923,7 @@
     async function parseResponse(response) {
       const text = await response.text();
       if (!text) return null;
-      try {
-        return JSON.parse(text);
-      } catch (error) {
-        return text;
-      }
+      try { return JSON.parse(text); } catch (error) { return text; }
     }
 
     async function apiRequest(kind, path, { method = "GET", body = null, expectBlob = false, signal } = {}) {
@@ -1696,44 +931,21 @@
       const logPath = `[${kind === "segment" ? "SEGMENT" : "3D"}] ${path}`;
       const startedAt = performance.now();
       let response;
-
       try {
-        response = await fetch(`${endpoint}${path}`, {
-          method,
-          body,
-          mode: "cors",
-          credentials: "omit",
-          signal
-        });
+        response = await fetch(`${endpoint}${path}`, { method, body, mode: "cors", credentials: "omit", signal });
       } catch (error) {
         const elapsed = performance.now() - startedAt;
         if (error && typeof error === "object" && Object.isExtensible(error)) error.endpointKind = kind;
-        logRequest({
-          method,
-          path: logPath,
-          status: error.name === "AbortError" ? "CANCEL" : "NETWORK",
-          elapsed,
-          tone: error.name === "AbortError" ? "warn" : "bad",
-          requestId: ""
-        });
+        logRequest({ method, path: logPath, status: error.name === "AbortError" ? "CANCEL" : "NETWORK", elapsed, tone: error.name === "AbortError" ? "warn" : "bad", requestId: "" });
         throw error;
       }
-
       const elapsed = performance.now() - startedAt;
       const requestId = response.headers.get("x-fc-request-id") || "";
-
       if (!response.ok) {
         const payload = await parseResponse(response);
         logRequest({ method, path: logPath, status: response.status, elapsed, tone: "bad", requestId });
-        throw new ApiError(
-          errorMessageFrom(payload, `HTTP ${response.status}`),
-          response.status,
-          payload,
-          requestId,
-          kind
-        );
+        throw new ApiError(errorMessageFrom(payload, `HTTP ${response.status}`), response.status, payload, requestId, kind);
       }
-
       const payload = expectBlob ? await response.blob() : await parseResponse(response);
       logRequest({ method, path: logPath, status: response.status, elapsed, tone: "good", requestId });
       return { payload, elapsed, response };
@@ -1744,72 +956,51 @@
       const payload = error.payload;
       const code = payload && typeof payload === "object" ? String(payload.Code || payload.code || "") : "";
       const message = `${error.message} ${code}`.toLowerCase();
-      return code === "MissingRequiredHeader" ||
-        code === "InvalidArgument" ||
-        message.includes("authorization") ||
-        message.includes("required http header date");
+      return code === "MissingRequiredHeader" || code === "InvalidArgument" || message.includes("authorization") || message.includes("required http header date");
     }
 
     function handleFailure(error, context) {
       const failureKind = error.endpointKind || (context === "segment" ? "segment" : "threeD");
+      if (context === "generate") {
+        closeDialog(elements.generatingDialog);
+        elements.failureCopy.textContent = error.name === "AbortError" ? "生成等待已取消，后端任务可能仍在继续" : "生成过程未能完成，请检查网络后重新尝试";
+        openDialog(elements.failureDialog);
+        announce(`3D 模型生成失败。${error.message || "未知错误"}`);
+      }
       if (error.name === "AbortError") {
-        showRuntimeNotice(
-          "已取消浏览器等待",
-          "后端 GPU 任务可能仍会继续完成，以保持实例状态安全。请稍后重新检查模型状态。",
-          "warn"
-        );
+        if (context !== "generate") showRuntimeNotice("已取消浏览器等待", "后端 GPU 任务可能仍会继续完成，请稍后重新检查模型状态。", "warn");
         return;
       }
-
       if (isAuthenticationError(error)) {
         elements.authNotice.hidden = false;
         updateStatus(failureKind === "segment" ? "segment" : "service", "bad", "鉴权阻止访问", "HTTP 触发器不是匿名模式");
-        showRuntimeNotice("无法直接调用 FC", `网关返回：${error.message}`, "danger");
+        if (context !== "generate") showRuntimeNotice("无法直接调用 FC", `网关返回：${error.message}`, "danger");
         return;
       }
-
       if (error instanceof ApiError) {
-        if (error.status === 413) {
-          showRuntimeNotice("上传内容过大", "请确保单文件不超过 20 MB，两个文件合计不超过 30 MB。", "danger");
-        } else if (error.status === 422) {
-          showRuntimeNotice("输入校验失败", error.message, "danger");
-        } else if (error.status === 503) {
-          showRuntimeNotice("服务暂未就绪", error.message, "danger");
-          if (failureKind === "segment") {
-            updateStatus("segment", "bad", "尚未预热", error.message);
-          } else if (context === "generate") {
-            updateStatus("model", "bad", "尚未预热", error.message);
-          }
-        } else {
-          const requestHint = error.requestId ? `，Request ID: ${error.requestId}` : "";
-          showRuntimeNotice(`请求失败 · HTTP ${error.status}`, `${error.message}${requestHint}`, "danger");
-        }
+        if (error.status === 503) updateStatus(failureKind === "segment" ? "segment" : "model", "bad", "尚未预热", error.message);
+        if (context !== "generate") showRuntimeNotice(`请求失败 · HTTP ${error.status}`, error.message, "danger");
         return;
       }
-
       if (error instanceof TypeError) {
         updateStatus(failureKind === "segment" ? "segment" : "service", "bad", "网络不可达", "检查地址、证书与 CORS");
-        showRuntimeNotice(
-          "网络请求失败",
-          "请检查 FC 地址、HTTPS 证书与 HTTP 触发器 CORS 设置。建议通过本地 HTTP 服务打开本页，不要直接使用 file://。",
-          "danger"
-        );
+        if (context !== "generate") showRuntimeNotice("网络请求失败", "请检查 FC 地址、HTTPS 证书与 HTTP 触发器 CORS 设置。", "danger");
         return;
       }
-
-      showRuntimeNotice("操作失败", error.message || "发生未知错误。", "danger");
+      if (context !== "generate") showRuntimeNotice("操作失败", error.message || "发生未知错误。", "danger");
     }
 
     async function runOperation(label, worker) {
-      if (state.busy) return;
+      if (state.busy) return false;
       hideRuntimeNotice();
       state.currentController = new AbortController();
       setBusy(true);
       startTimer();
       announce(`${label}开始。`);
-
+      let completed = false;
       try {
         await worker(state.currentController.signal);
+        completed = true;
       } catch (error) {
         handleFailure(error, label);
       } finally {
@@ -1817,6 +1008,7 @@
         setBusy(false);
         state.currentController = null;
       }
+      return completed;
     }
 
     async function runSequentialChecks() {
@@ -1827,34 +1019,16 @@
         updateStatus("gpu", "unknown", "等待前一步", "GET /gpu");
         updateStatus("checkpoint", "unknown", "等待前一步", "GET /readyz");
         updateStatus("model", "unknown", "等待预热信息", "由 FC Initializer 加载");
-
         const health = await apiRequest("threeD", "/healthz", { signal });
         const healthOk = health.payload && health.payload.status === "ok";
-        updateStatus(
-          "service",
-          healthOk ? "good" : "warn",
-          healthOk ? "容器在线" : "响应异常",
-          healthOk ? `HTTP 200 · ${formatElapsed(health.elapsed)}` : "未返回 status=ok"
-        );
-
+        updateStatus("service", healthOk ? "good" : "warn", healthOk ? "容器在线" : "响应异常", healthOk ? `HTTP 200 · ${formatElapsed(health.elapsed)}` : "未返回 status=ok");
         updateStatus("gpu", "pending", "正在检查", "GET /gpu");
         const gpu = await apiRequest("threeD", "/gpu", { signal });
         const gpuData = gpu.payload || {};
         const cudaReady = Boolean(gpuData.cuda_available) && Number(gpuData.device_count || 0) > 0;
         const memoryFreeGb = Number(gpuData.memory_free_bytes || 0) / (1024 ** 3);
-        const gpuDetail = [
-          gpuData.torch_version ? `Torch ${gpuData.torch_version}` : "",
-          gpuData.torch_cuda_version ? `CUDA ${gpuData.torch_cuda_version}` : "",
-          `${Number(gpuData.device_count || 0)} device`,
-          memoryFreeGb > 0 ? `${memoryFreeGb.toFixed(1)} GB free` : ""
-        ].filter(Boolean).join(" · ");
-        updateStatus(
-          "gpu",
-          cudaReady ? "good" : "bad",
-          cudaReady ? (gpuData.device_name || "CUDA 可用") : "CUDA 不可用",
-          gpuDetail || "未返回 GPU 信息"
-        );
-
+        const gpuDetail = [gpuData.torch_version ? `Torch ${gpuData.torch_version}` : "", gpuData.torch_cuda_version ? `CUDA ${gpuData.torch_cuda_version}` : "", `${Number(gpuData.device_count || 0)} device`, memoryFreeGb > 0 ? `${memoryFreeGb.toFixed(1)} GB free` : ""].filter(Boolean).join(" · ");
+        updateStatus("gpu", cudaReady ? "good" : "bad", cudaReady ? (gpuData.device_name || "CUDA 可用") : "CUDA 不可用", gpuDetail || "未返回 GPU 信息");
         updateStatus("checkpoint", "pending", "正在检查", "GET /readyz");
         const ready = await apiRequest("threeD", "/readyz", { signal });
         const readyData = ready.payload || {};
@@ -1865,34 +1039,12 @@
         const sam3dLoaded = Boolean(sam3d.model_loaded || sam3d.ready);
         const sam3Error = sam3.last_load_error || "";
         const sam3dError = sam3d.last_load_error || readyData.last_load_error || "";
-        updateStatus(
-          "segment",
-          sam3Loaded ? "good" : (sam3Error ? "bad" : "warn"),
-          sam3Loaded ? "分割模型已预热" : (sam3Error ? "预热失败" : "等待 Initializer"),
-          sam3Error || sam3.checkpoint_path || "SAM3 checkpoint 状态未返回"
-        );
-        const assetsReady = Boolean(
-          sam3.checkpoint_present || readyData.checkpoint_present
-        ) && Boolean(sam3d.config_present || readyData.config_present);
-        updateStatus(
-          "checkpoint",
-          assetsReady ? "good" : "bad",
-          assetsReady ? "两套模型资源已挂载" : "模型资源不完整",
-          `${sam3.checkpoint_path || "SAM3 checkpoint 未返回"} · ${sam3d.config_path || readyData.config_path || "SAM3D config 未返回"}`
-        );
-        updateStatus(
-          "model",
-          sam3dLoaded ? "good" : (sam3dError ? "bad" : "warn"),
-          sam3dLoaded ? "3D 模型已预热" : (sam3dError ? "预热失败" : "等待 Initializer"),
-          sam3dError || (sam3dLoaded ? "GPU 实例可开始推理" : "请检查函数 Initializer 配置")
-        );
-
+        updateStatus("segment", sam3Loaded ? "good" : (sam3Error ? "bad" : "warn"), sam3Loaded ? "分割模型已预热" : (sam3Error ? "预热失败" : "等待 Initializer"), sam3Error || sam3.checkpoint_path || "SAM3 checkpoint 状态未返回");
+        const assetsReady = Boolean(sam3.checkpoint_present || readyData.checkpoint_present) && Boolean(sam3d.config_present || readyData.config_present);
+        updateStatus("checkpoint", assetsReady ? "good" : "bad", assetsReady ? "两套模型资源已挂载" : "模型资源不完整", `${sam3.checkpoint_path || "SAM3 checkpoint 未返回"} · ${sam3d.config_path || readyData.config_path || "SAM3D config 未返回"}`);
+        updateStatus("model", sam3dLoaded ? "good" : (sam3dError ? "bad" : "warn"), sam3dLoaded ? "3D 模型已预热" : (sam3dError ? "预热失败" : "等待 Initializer"), sam3dError || (sam3dLoaded ? "GPU 实例可开始推理" : "请检查函数 Initializer 配置"));
         const allReady = healthOk && cudaReady && assetsReady && sam3Loaded && sam3dLoaded && Boolean(readyData.ready);
-        showRuntimeNotice(
-          allReady ? "组合函数已完成双模型预热" : "检查完成，但仍有阻塞项",
-          allReady ? "同一 GPU 实例可以串行接收 SAM3 分割与 SAM3D 生成请求。" : "请查看左侧状态项，确认组合函数的 Initializer 已同时加载两个模型。",
-          allReady ? "info" : "warn"
-        );
+        showRuntimeNotice(allReady ? "组合函数已完成双模型预热" : "检查完成，但仍有阻塞项", allReady ? "同一 GPU 实例可以串行接收 SAM3 分割与 SAM3D 生成请求。" : "请在服务设置中检查各状态项。", allReady ? "info" : "warn");
       });
     }
 
@@ -1901,20 +1053,40 @@
       return checked ? checked.value : "ply";
     }
 
+    function openGenerationConfirmation() {
+      const validation = validateSelection();
+      if (!validation.valid) {
+        showRuntimeNotice("不能开始生成", validation.message, "danger");
+        return;
+      }
+      updateCreditPreview();
+      if (state.credits < GENERATION_COST) {
+        showRuntimeNotice("积分不足", `当前积分为 ${state.credits}，生成模型需要 ${GENERATION_COST} 积分。`, "danger");
+        return;
+      }
+      openDialog(elements.creditDialog);
+    }
+
+    function consumeCredits() {
+      state.credits = Math.max(0, state.credits - GENERATION_COST);
+      try { window.localStorage.setItem("sam3d-demo-credits", String(state.credits)); } catch (error) { /* current session still works */ }
+      updateCreditPreview();
+    }
+
     async function generateArtifact() {
       const validation = validateSelection();
       if (!validation.valid) {
         showRuntimeNotice("不能开始生成", validation.message, "danger");
         return;
       }
-
       const seedValue = Number(elements.seed.value);
       if (!Number.isInteger(seedValue) || seedValue < 0 || seedValue > 2147483647) {
         showRuntimeNotice("随机种子无效", "请输入 0 到 2147483647 之间的整数。", "danger");
         elements.seed.focus();
         return;
       }
-
+      closeDialog(elements.failureDialog);
+      openDialog(elements.generatingDialog);
       const outputFormat = getSelectedFormat();
       await runOperation("generate", async (signal) => {
         const form = new FormData();
@@ -1922,21 +1094,13 @@
         form.append("mask", state.uploads.mask.file, "mask.png");
         form.append("seed", String(seedValue));
         form.append("output_format", outputFormat);
-
         elements.resultTitle.textContent = "正在生成 3D 文件";
         elements.resultMeta.textContent = "请保持页面打开。请求只使用当前已确认的 Mask。";
-        const result = await apiRequest("threeD", "/generate", {
-          method: "POST",
-          body: form,
-          expectBlob: true,
-          signal
-        });
-
-        if (!(result.payload instanceof Blob) || result.payload.size === 0) {
-          throw new Error("服务返回了空文件。");
-        }
-
+        const result = await apiRequest("threeD", "/generate", { method: "POST", body: form, expectBlob: true, signal });
+        if (!(result.payload instanceof Blob) || result.payload.size === 0) throw new Error("服务返回了空文件。");
         if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
+        state.resultBlob = result.payload;
+        state.resultFormat = outputFormat;
         state.resultUrl = URL.createObjectURL(result.payload);
         const filename = `sam3d-result.${outputFormat}`;
         elements.downloadLink.href = state.resultUrl;
@@ -1945,7 +1109,9 @@
         elements.resultTitle.textContent = filename;
         elements.resultMeta.textContent = `${formatBytes(result.payload.size)} · ${formatElapsed(result.elapsed)} · seed ${seedValue}`;
         updateStatus("model", "good", "3D 模型已预热", "本次推理已完成");
-        showRuntimeNotice("生成完成", `${filename} 已准备好，请点击“下载结果”。`, "info");
+        closeDialog(elements.generatingDialog);
+        await revealModelResult(result.payload, outputFormat);
+        announce("3D 模型已生成，可以下载或保存。");
       });
     }
 
@@ -1975,11 +1141,11 @@
       let left = box.left;
       let top = box.top;
       if (boxRatio > naturalRatio) {
-        width = box.height * naturalRatio;
-        left += (box.width - width) / 2;
-      } else {
         height = box.width / naturalRatio;
         top += (box.height - height) / 2;
+      } else {
+        width = box.height * naturalRatio;
+        left += (box.width - width) / 2;
       }
       return { left, top, width, height, right: left + width, bottom: top + height };
     }
@@ -2004,13 +1170,17 @@
     }
 
     function invalidateResult(message = "输入已变更，请重新生成 3D 文件。") {
-      if (!state.resultUrl && elements.downloadLink.hidden) return;
       if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
       state.resultUrl = null;
+      state.resultBlob = null;
+      state.resultFormat = null;
+      state.modelPoints = null;
       elements.downloadLink.removeAttribute("href");
       elements.downloadLink.hidden = true;
       elements.resultTitle.textContent = "3D 结果已失效";
       elements.resultMeta.textContent = message;
+      elements.modelPane.hidden = true;
+      elements.editor.classList.remove("has-result");
     }
 
     function invalidateMask(message) {
@@ -2032,7 +1202,6 @@
         elements.pointLayer.replaceChildren();
         return;
       }
-
       const appendMarker = (point, isCursor = false) => {
         const marker = document.createElement("span");
         marker.className = "point-marker";
@@ -2042,12 +1211,29 @@
         marker.style.top = `${display.top - stageBox.top + (point.y / Math.max(1, image.height - 1)) * display.height}px`;
         fragment.append(marker);
       };
-
-      for (const point of state.points) appendMarker(point);
-      if (state.keyboardMode && state.keyboardCursor) {
-        appendMarker({ ...state.keyboardCursor, label: getSelectedPointLabel() }, true);
-      }
+      if (!state.uploads.mask) for (const point of state.points) appendMarker(point);
+      if (state.keyboardMode && state.keyboardCursor) appendMarker({ ...state.keyboardCursor, label: getSelectedPointLabel() }, true);
       elements.pointLayer.replaceChildren(fragment);
+    }
+
+    function renderAnnotations() {
+      const image = state.uploads.image;
+      const display = displayedImageRect();
+      const stageBox = elements.selectionStage.getBoundingClientRect();
+      const fragment = document.createDocumentFragment();
+      if (!image || !display) {
+        elements.annotationLayer.replaceChildren();
+        return;
+      }
+      for (const annotation of state.annotations) {
+        const label = document.createElement("span");
+        label.className = "annotation-label";
+        label.textContent = annotation.text;
+        label.style.left = `${display.left - stageBox.left + (annotation.x / Math.max(1, image.width - 1)) * display.width}px`;
+        label.style.top = `${display.top - stageBox.top + (annotation.y / Math.max(1, image.height - 1)) * display.height}px`;
+        fragment.append(label);
+      }
+      elements.annotationLayer.replaceChildren(fragment);
     }
 
     function renderMaskOverlay() {
@@ -2058,8 +1244,7 @@
         clearMaskOverlay();
         return;
       }
-
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
       const width = Math.max(1, Math.round(display.width * dpr));
       const height = Math.max(1, Math.round(display.height * dpr));
       elements.maskOverlay.width = width;
@@ -2068,17 +1253,16 @@
       elements.maskOverlay.style.top = `${display.top - stageBox.top}px`;
       elements.maskOverlay.style.width = `${display.width}px`;
       elements.maskOverlay.style.height = `${display.height}px`;
-
       const context = elements.maskOverlay.getContext("2d", { willReadFrequently: true });
       context.clearRect(0, 0, width, height);
       context.drawImage(elements.maskPreview, 0, 0, width, height);
       const pixels = context.getImageData(0, 0, width, height);
       for (let index = 0; index < pixels.data.length; index += 4) {
         const selected = pixels.data[index] > 127 || pixels.data[index + 1] > 127 || pixels.data[index + 2] > 127;
-        pixels.data[index] = 166;
-        pixels.data[index + 1] = 255;
-        pixels.data[index + 2] = 86;
-        pixels.data[index + 3] = selected ? 112 : 0;
+        pixels.data[index] = 245;
+        pixels.data[index + 1] = 43;
+        pixels.data[index + 2] = 48;
+        pixels.data[index + 3] = selected ? 142 : 0;
       }
       context.putImageData(pixels, 0, 0);
     }
@@ -2087,15 +1271,15 @@
       window.requestAnimationFrame(() => {
         renderMaskOverlay();
         renderPoints();
+        renderAnnotations();
       });
     }
 
     function pointFromClient(clientX, clientY) {
       const image = state.uploads.image;
       const display = displayedImageRect();
-      if (!image || !display || clientX < display.left || clientX > display.right || clientY < display.top || clientY > display.bottom) {
-        return null;
-      }
+      const stageBox = elements.selectionStage.getBoundingClientRect();
+      if (!image || !display || clientX < stageBox.left || clientX > stageBox.right || clientY < stageBox.top || clientY > stageBox.bottom) return null;
       return {
         x: Math.max(0, Math.min(image.width - 1, Math.round(((clientX - display.left) / display.width) * (image.width - 1)))),
         y: Math.max(0, Math.min(image.height - 1, Math.round(((clientY - display.top) / display.height) * (image.height - 1))))
@@ -2105,8 +1289,9 @@
     function updateSelectionActions() {
       const hasPoints = state.points.length > 0;
       elements.undoPointButton.disabled = state.busy || !hasPoints;
-      elements.clearPointsButton.disabled = state.busy || !hasPoints;
+      elements.clearPointsButton.disabled = state.busy || (!hasPoints && state.annotations.length === 0);
       elements.replaceImageButton.disabled = state.busy;
+      elements.rotateButton.disabled = state.busy || !state.uploads.image;
       elements.imageInput.disabled = state.busy;
     }
 
@@ -2114,37 +1299,35 @@
       const image = state.uploads.image;
       const mask = state.uploads.mask;
       const positiveCount = state.points.filter((point) => point.label === 1).length;
-      let message = "等待选择输入图片。";
+      let message = "请先上传图片";
       let tone = "unknown";
       let valid = false;
-
-      if (image && state.points.length === 0) {
-        message = "图片已就绪，请在图中添加至少一个绿色加选点。";
+      if (image && !elements.aiToggle.checked) {
+        message = "AI 捕捉已关闭，开启后可继续编辑选区";
+      } else if (image && state.points.length === 0) {
+        message = "请点击画面中的微生物进行捕捉";
       } else if (image && positiveCount === 0) {
-        message = `已有 ${state.points.length} 个减选点，还需要至少一个加选点。`;
+        message = "还需要至少添加一个选区";
       } else if (image && (state.segmentBusy || state.segmentQueued)) {
-        message = `正在计算最新 Mask · ${positiveCount} 个加选点 · ${state.points.length - positiveCount} 个减选点`;
+        message = "正在识别最新选区";
       } else if (image && !mask) {
-        message = state.segmentError ? `Mask 生成失败：${state.segmentError}` : "最新 Mask 尚未生成，请再次点选或撤销后重试。";
+        message = state.segmentError ? `选区识别失败：${state.segmentError}` : "正在等待最新选区";
         tone = state.segmentError ? "bad" : "unknown";
       } else if (image && mask) {
         const combinedSize = image.file.size + mask.file.size;
-        if (state.maskRevision !== state.pointsRevision) {
-          message = "Mask 已过期，正在等待最新点位对应的结果。";
-        } else if (combinedSize > MAX_REQUEST_BYTES) {
-          message = `原图与 Mask 合计 ${formatBytes(combinedSize)}，超过 30 MB 上限。`;
+        if (state.maskRevision !== state.pointsRevision) message = "选区已更新，正在等待识别结果";
+        else if (combinedSize > MAX_REQUEST_BYTES) {
+          message = `原图与 Mask 合计 ${formatBytes(combinedSize)}，超过 30 MB 上限`;
           tone = "bad";
         } else if (image.width !== mask.width || image.height !== mask.height) {
-          message = `尺寸不一致：图片 ${image.width}×${image.height}，Mask ${mask.width}×${mask.height}。`;
+          message = `尺寸不一致：图片 ${image.width}×${image.height}，Mask ${mask.width}×${mask.height}`;
           tone = "bad";
         } else {
-          const scoreCopy = Number.isFinite(state.segmentScore) ? ` · score ${state.segmentScore.toFixed(3)}` : "";
-          message = `Mask 已就绪 · ${image.width}×${image.height} · ${positiveCount} 加选 / ${state.points.length - positiveCount} 减选${scoreCopy}`;
+          message = "已识别选区，可继续增加或减少选区";
           tone = "good";
           valid = true;
         }
       }
-
       elements.uploadValidation.textContent = message;
       elements.uploadValidation.dataset.tone = tone;
       updateSelectionActions();
@@ -2157,14 +1340,7 @@
       if (typeof valid !== "boolean") {
         const image = state.uploads.image;
         const mask = state.uploads.mask;
-        valid = Boolean(
-          image &&
-          mask &&
-          state.maskRevision === state.pointsRevision &&
-          image.width === mask.width &&
-          image.height === mask.height &&
-          image.file.size + mask.file.size <= MAX_REQUEST_BYTES
-        );
+        valid = Boolean(image && mask && state.maskRevision === state.pointsRevision && image.width === mask.width && image.height === mask.height && image.file.size + mask.file.size <= MAX_REQUEST_BYTES);
       }
       elements.generateButton.disabled = state.busy || state.segmentBusy || state.segmentQueued || !valid;
     }
@@ -2180,10 +1356,7 @@
           URL.revokeObjectURL(url);
           return;
         }
-        if (dimensions.width !== image.width || dimensions.height !== image.height) {
-          throw new Error(`Mask 尺寸 ${dimensions.width}×${dimensions.height} 与图片 ${image.width}×${image.height} 不一致。`);
-        }
-
+        if (dimensions.width !== image.width || dimensions.height !== image.height) throw new Error(`Mask 尺寸 ${dimensions.width}×${dimensions.height} 与图片 ${image.width}×${image.height} 不一致。`);
         releaseMask();
         state.uploads.mask = { file: blob, url, ...dimensions };
         state.maskRevision = revision;
@@ -2197,21 +1370,15 @@
           releaseMask();
           return;
         }
-
-        const positiveCount = state.points.filter((point) => point.label === 1).length;
         elements.maskMeta.textContent = `${dimensions.width}×${dimensions.height} · ${formatBytes(blob.size)} · ${formatElapsed(elapsed)}`;
-        elements.maskPreview.alt = `二值对象 Mask，${positiveCount} 个加选点，${state.points.length - positiveCount} 个减选点`;
         elements.maskEmpty.hidden = true;
         elements.maskFilled.hidden = false;
         updateStatus("segment", "good", "Mask 已更新", `${state.points.length} 个点 · ${formatElapsed(elapsed)}`);
         scheduleSelectionRender();
-        announce(`Mask 已更新，共 ${state.points.length} 个点。`);
+        announce(`选区已更新，共 ${state.points.length} 个点。`);
       } catch (error) {
-        if (state.uploads.mask && state.uploads.mask.url === url) {
-          releaseMask();
-        } else {
-          URL.revokeObjectURL(url);
-        }
+        if (state.uploads.mask && state.uploads.mask.url === url) releaseMask();
+        else URL.revokeObjectURL(url);
         throw error;
       }
     }
@@ -2222,7 +1389,6 @@
       elements.segmentProgress.hidden = false;
       elements.selectionStage.setAttribute("aria-busy", "true");
       updateGenerateAvailability(false);
-
       try {
         while (state.segmentQueued) {
           state.segmentQueued = false;
@@ -2230,27 +1396,19 @@
           const revision = state.pointsRevision;
           const points = state.points.map((point) => ({ ...point }));
           if (!image || points.length === 0 || !points.some((point) => point.label === 1)) continue;
-
-          elements.segmentProgress.textContent = "更新 MASK…";
+          elements.segmentProgress.textContent = "正在识别选区";
           updateStatus("segment", "pending", "正在分割", `${points.length} 个点 · POST /segment`);
           const form = new FormData();
           form.append("image", image.file, image.file.name);
           form.append("points", JSON.stringify(points));
-
           try {
-            const result = await apiRequest("segment", "/segment", {
-              method: "POST",
-              body: form,
-              expectBlob: true
-            });
-            if (revision === state.pointsRevision) {
-              await applyMaskResponse(result.payload, revision, result.response, result.elapsed);
-            }
+            const result = await apiRequest("segment", "/segment", { method: "POST", body: form, expectBlob: true });
+            if (revision === state.pointsRevision) await applyMaskResponse(result.payload, revision, result.response, result.elapsed);
           } catch (error) {
             if (revision === state.pointsRevision) {
               state.segmentError = error.message || "未知错误";
               handleFailure(error, "segment");
-              elements.uploadValidation.textContent = `Mask 生成失败：${error.message || "未知错误"}`;
+              elements.uploadValidation.textContent = `选区识别失败：${error.message || "未知错误"}`;
               elements.uploadValidation.dataset.tone = "bad";
             }
           }
@@ -2274,19 +1432,19 @@
       }
       state.segmentQueued = true;
       elements.segmentProgress.hidden = false;
-      elements.segmentProgress.textContent = state.segmentBusy ? "已排队最新点位" : "准备更新 MASK…";
+      elements.segmentProgress.textContent = state.segmentBusy ? "已排队最新选区" : "准备识别选区";
       validateSelection();
       void pumpSegmentationQueue();
     }
 
     function addPoint(point) {
-      if (!point || !state.uploads.image || state.busy) return;
+      if (!point || !state.uploads.image || state.busy || !elements.aiToggle.checked) return;
       const label = getSelectedPointLabel();
       state.points.push({ x: point.x, y: point.y, label });
       state.pointsRevision += 1;
       renderPoints();
-      queueSegmentation(`${label === 1 ? "加选" : "减选"}点已加入，正在更新 Mask。`);
-      announce(`${label === 1 ? "加选" : "减选"}点已加入。`);
+      queueSegmentation(`${label === 1 ? "增加" : "减少"}选区已加入，正在识别。`);
+      announce(`${label === 1 ? "增加" : "减少"}选区已加入。`);
     }
 
     function undoPoint() {
@@ -2294,20 +1452,22 @@
       state.points.pop();
       state.pointsRevision += 1;
       renderPoints();
-      queueSegmentation(state.points.length ? "已撤销上一点，正在更新 Mask。" : "已撤销最后一个点，Mask 已清除。");
+      queueSegmentation(state.points.length ? "已撤销上一点，正在更新选区。" : "已撤销最后一个点，选区已清除。");
     }
 
     function clearPoints() {
-      if (state.busy || state.points.length === 0) return;
+      if (state.busy || (state.points.length === 0 && state.annotations.length === 0)) return;
       state.points = [];
+      state.annotations = [];
       state.pointsRevision += 1;
       state.segmentQueued = false;
       state.segmentError = null;
       state.keyboardMode = false;
       renderPoints();
-      invalidateMask("选择已清除，请重新添加加选点。");
+      renderAnnotations();
+      invalidateMask("选择已清除，请重新添加选区。");
       validateSelection();
-      announce("对象点与 Mask 已清除。");
+      announce("对象点、标注与选区已清除。");
     }
 
     function resetImageState() {
@@ -2315,6 +1475,7 @@
       if (previous && previous.url) URL.revokeObjectURL(previous.url);
       state.uploads.image = null;
       state.points = [];
+      state.annotations = [];
       state.pointsRevision += 1;
       state.segmentQueued = false;
       state.segmentError = null;
@@ -2324,9 +1485,12 @@
       elements.imageFilled.hidden = true;
       elements.imageZone.hidden = false;
       elements.imageMeta.textContent = "";
+      elements.editorTitle.textContent = "编辑：叶片表皮";
       releaseMask();
       invalidateResult("输入图片已更换，请重新点选并生成。");
       renderPoints();
+      renderAnnotations();
+      validateSelection();
     }
 
     async function acceptImage(file) {
@@ -2339,31 +1503,26 @@
         showRuntimeNotice("文件过大", `${file.name} 为 ${formatBytes(file.size)}，单文件上限是 20 MB。`, "danger");
         return;
       }
-
       const url = URL.createObjectURL(file);
       try {
         const dimensions = await imageDimensions(file, url);
         if (dimensions.width * dimensions.height > MAX_IMAGE_PIXELS) {
           URL.revokeObjectURL(url);
-          showRuntimeNotice(
-            "图片像素过多",
-            `${file.name} 为 ${dimensions.width}×${dimensions.height}，超过 4000 万像素上限。`,
-            "danger"
-          );
+          showRuntimeNotice("图片像素过多", `${file.name} 为 ${dimensions.width}×${dimensions.height}，超过 4000 万像素上限。`, "danger");
           return;
         }
-
         resetImageState();
         state.uploads.image = { file, url, ...dimensions };
         state.keyboardCursor = { x: Math.floor(dimensions.width / 2), y: Math.floor(dimensions.height / 2) };
         elements.imagePreview.src = url;
         elements.imageMeta.textContent = `${file.name} · ${dimensions.width}×${dimensions.height} · ${formatBytes(file.size)}`;
+        elements.editorTitle.textContent = "编辑：叶片表皮";
         elements.imageZone.hidden = true;
         elements.imageFilled.hidden = false;
         hideRuntimeNotice();
         validateSelection();
         scheduleSelectionRender();
-        announce("图片已载入，请添加对象点。");
+        announce("图片已载入，请点击目标对象。");
       } catch (error) {
         URL.revokeObjectURL(url);
         showRuntimeNotice("图片读取失败", error.message, "danger");
@@ -2385,7 +1544,7 @@
       }
       zone.addEventListener("drop", (event) => {
         const file = event.dataTransfer && event.dataTransfer.files[0];
-        if (file) acceptImage(file);
+        if (file) void acceptImage(file);
       });
     }
 
@@ -2401,17 +1560,26 @@
     }
 
     function handleSelectionClick(event) {
-      if (state.busy || !state.uploads.image) return;
+      if (state.busy || !state.uploads.image || !elements.aiToggle.checked) return;
       state.keyboardMode = false;
       const point = pointFromClient(event.clientX, event.clientY);
-      if (point) {
-        state.keyboardCursor = point;
-        addPoint(point);
+      if (!point) return;
+      state.keyboardCursor = point;
+      if (state.activeTool === "text") {
+        const text = window.prompt("输入标注文字");
+        if (text && text.trim()) {
+          state.annotations.push({ ...point, text: text.trim().slice(0, 32) });
+          renderAnnotations();
+          updateSelectionActions();
+          announce("文字标注已添加。");
+        }
+        return;
       }
+      addPoint(point);
     }
 
     function handleSelectionKeydown(event) {
-      if (state.busy || !state.uploads.image) return;
+      if (state.busy || !state.uploads.image || !elements.aiToggle.checked) return;
       const image = state.uploads.image;
       const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
       if (keys.includes(event.key)) {
@@ -2436,14 +1604,225 @@
       }
     }
 
+    async function rotateImage() {
+      if (!state.uploads.image || state.busy || !elements.imagePreview.complete) return;
+      const image = state.uploads.image;
+      const canvas = document.createElement("canvas");
+      canvas.width = image.height;
+      canvas.height = image.width;
+      const context = canvas.getContext("2d");
+      context.translate(canvas.width, 0);
+      context.rotate(Math.PI / 2);
+      context.drawImage(elements.imagePreview, 0, 0, image.width, image.height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) {
+        showRuntimeNotice("旋转失败", "浏览器无法生成旋转后的图片。", "danger");
+        return;
+      }
+      const rotated = new File([blob], `${image.file.name.replace(/\.[^.]+$/, "")}-rotated.png`, { type: "image/png" });
+      await acceptImage(rotated);
+      announce("图片已顺时针旋转 90 度。");
+    }
+
+    function selectTool(button) {
+      const tool = button.dataset.tool;
+      state.activeTool = tool;
+      for (const item of document.querySelectorAll("[data-tool]")) item.setAttribute("aria-pressed", String(item === button));
+      const label = button.getAttribute("aria-label") || "选区";
+      announce(`已切换到${label}。`);
+    }
+
+    function readPlyScalar(view, offset, type, littleEndian) {
+      const readers = {
+        char: [1, "getInt8"], int8: [1, "getInt8"], uchar: [1, "getUint8"], uint8: [1, "getUint8"],
+        short: [2, "getInt16"], int16: [2, "getInt16"], ushort: [2, "getUint16"], uint16: [2, "getUint16"],
+        int: [4, "getInt32"], int32: [4, "getInt32"], uint: [4, "getUint32"], uint32: [4, "getUint32"],
+        float: [4, "getFloat32"], float32: [4, "getFloat32"], double: [8, "getFloat64"], float64: [8, "getFloat64"]
+      };
+      const entry = readers[type];
+      if (!entry) throw new Error(`不支持的 PLY 属性类型：${type}`);
+      const value = entry[0] === 1 ? view[entry[1]](offset) : view[entry[1]](offset, littleEndian);
+      return { value, size: entry[0] };
+    }
+
+    async function parsePly(blob) {
+      const buffer = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const probe = new TextDecoder("ascii").decode(bytes.subarray(0, Math.min(bytes.length, 1024 * 1024)));
+      const marker = probe.indexOf("end_header");
+      if (marker < 0) throw new Error("PLY 文件缺少头部结束标记");
+      let dataOffset = marker + "end_header".length;
+      while (bytes[dataOffset] === 10 || bytes[dataOffset] === 13) dataOffset += 1;
+      const header = probe.slice(0, marker).split(/\r?\n/);
+      const formatLine = header.find((line) => line.startsWith("format ")) || "";
+      const format = formatLine.split(/\s+/)[1];
+      let vertexCount = 0;
+      let inVertices = false;
+      const properties = [];
+      for (const line of header) {
+        const parts = line.trim().split(/\s+/);
+        if (parts[0] === "element") {
+          inVertices = parts[1] === "vertex";
+          if (inVertices) vertexCount = Number(parts[2]);
+        } else if (inVertices && parts[0] === "property" && parts[1] !== "list") {
+          properties.push({ type: parts[1], name: parts[2] });
+        }
+      }
+      if (!vertexCount || !properties.some((item) => item.name === "x") || !properties.some((item) => item.name === "y") || !properties.some((item) => item.name === "z")) throw new Error("PLY 文件不包含有效顶点");
+      const strideStep = Math.max(1, Math.ceil(vertexCount / 12000));
+      const points = [];
+      if (format === "ascii") {
+        const rows = new TextDecoder().decode(bytes.subarray(dataOffset)).trim().split(/\r?\n/);
+        const index = Object.fromEntries(properties.map((property, propertyIndex) => [property.name, propertyIndex]));
+        for (let rowIndex = 0; rowIndex < Math.min(vertexCount, rows.length); rowIndex += strideStep) {
+          const values = rows[rowIndex].trim().split(/\s+/).map(Number);
+          points.push({ x: values[index.x], y: values[index.y], z: values[index.z], r: values[index.red], g: values[index.green], b: values[index.blue] });
+        }
+      } else if (format === "binary_little_endian" || format === "binary_big_endian") {
+        const littleEndian = format === "binary_little_endian";
+        const scratch = new DataView(new ArrayBuffer(8));
+        const sizes = properties.map((property) => readPlyScalar(scratch, 0, property.type, true).size);
+        const vertexStride = sizes.reduce((sum, size) => sum + size, 0);
+        const view = new DataView(buffer);
+        for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += strideStep) {
+          let offset = dataOffset + vertexIndex * vertexStride;
+          const point = {};
+          for (let propertyIndex = 0; propertyIndex < properties.length; propertyIndex += 1) {
+            const result = readPlyScalar(view, offset, properties[propertyIndex].type, littleEndian);
+            point[properties[propertyIndex].name] = result.value;
+            offset += result.size;
+          }
+          points.push({ x: point.x, y: point.y, z: point.z, r: point.red, g: point.green, b: point.blue });
+        }
+      } else {
+        throw new Error(`不支持的 PLY 格式：${format}`);
+      }
+      const valid = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z));
+      const min = { x: Infinity, y: Infinity, z: Infinity };
+      const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+      for (const point of valid) {
+        for (const key of ["x", "y", "z"]) {
+          min[key] = Math.min(min[key], point[key]);
+          max[key] = Math.max(max[key], point[key]);
+        }
+      }
+      const center = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
+      const scale = 2 / Math.max(max.x - min.x, max.y - min.y, max.z - min.z, 0.0001);
+      return valid.map((point) => ({ x: (point.x - center.x) * scale, y: (point.y - center.y) * scale, z: (point.z - center.z) * scale, r: point.r, g: point.g, b: point.b }));
+    }
+
+    function drawPointCloud() {
+      if (!state.modelPoints || elements.modelCanvas.hidden) return;
+      const rect = elements.modelStage.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(1, Math.round(rect.width * dpr));
+      const height = Math.max(1, Math.round(rect.height * dpr));
+      if (elements.modelCanvas.width !== width || elements.modelCanvas.height !== height) {
+        elements.modelCanvas.width = width;
+        elements.modelCanvas.height = height;
+      }
+      const context = elements.modelCanvas.getContext("2d");
+      context.clearRect(0, 0, width, height);
+      const cosY = Math.cos(state.modelRotation.y);
+      const sinY = Math.sin(state.modelRotation.y);
+      const cosX = Math.cos(state.modelRotation.x);
+      const sinX = Math.sin(state.modelRotation.x);
+      const scale = Math.min(width, height) * 0.35 * state.modelZoom;
+      const projected = [];
+      for (const point of state.modelPoints) {
+        const rx = point.x * cosY - point.z * sinY;
+        const rz = point.x * sinY + point.z * cosY;
+        const ry = point.y * cosX - rz * sinX;
+        const depth = point.y * sinX + rz * cosX;
+        const perspective = 2.8 / Math.max(1.4, 3.2 + depth);
+        projected.push({ x: width / 2 + rx * scale * perspective, y: height / 2 - ry * scale * perspective, z: depth, color: Number.isFinite(point.r) ? `rgb(${point.r},${point.g},${point.b})` : null });
+      }
+      projected.sort((a, b) => a.z - b.z);
+      for (const point of projected) {
+        const light = Math.max(0, Math.min(1, (point.z + 1) / 2));
+        context.fillStyle = point.color || `rgb(${Math.round(116 + light * 54)}, ${Math.round(137 + light * 54)}, ${Math.round(91 + light * 44)})`;
+        const size = Math.max(1.2, (1.5 + light * 1.8) * dpr);
+        context.fillRect(point.x, point.y, size, size);
+      }
+    }
+
+    async function revealModelResult(blob, format) {
+      elements.modelPane.hidden = false;
+      elements.editor.classList.add("has-result");
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      state.modelPoints = null;
+      elements.modelCanvas.hidden = true;
+      elements.modelFallback.hidden = true;
+      if (format === "ply") {
+        try {
+          state.modelPoints = await parsePly(blob);
+          elements.modelCanvas.hidden = false;
+          elements.modelBadge.textContent = "拖动旋转 · 滚轮缩放";
+          drawPointCloud();
+          return;
+        } catch (error) {
+          elements.modelBadge.textContent = "对象预览";
+        }
+      }
+      elements.modelFallback.src = elements.imagePreview.src;
+      const maskUrl = state.uploads.mask && state.uploads.mask.url;
+      if (maskUrl) {
+        elements.modelFallback.style.maskImage = `url("${maskUrl}")`;
+        elements.modelFallback.style.webkitMaskImage = `url("${maskUrl}")`;
+        elements.modelFallback.style.maskSize = "contain";
+        elements.modelFallback.style.webkitMaskSize = "contain";
+        elements.modelFallback.style.maskPosition = "center";
+        elements.modelFallback.style.webkitMaskPosition = "center";
+        elements.modelFallback.style.maskRepeat = "no-repeat";
+        elements.modelFallback.style.webkitMaskRepeat = "no-repeat";
+      }
+      elements.modelFallback.hidden = false;
+    }
+
+    function saveCurrentModel() {
+      if (!state.resultUrl) {
+        showRuntimeNotice("还没有可保存的模型", "完成 3D 转换后再保存。", "warn");
+        return;
+      }
+      try {
+        const records = JSON.parse(window.localStorage.getItem("sam3d-saved-models") || "[]");
+        records.unshift({ name: elements.downloadLink.download, format: state.resultFormat, size: state.resultBlob.size, savedAt: new Date().toISOString() });
+        window.localStorage.setItem("sam3d-saved-models", JSON.stringify(records.slice(0, 20)));
+      } catch (error) { /* toast still confirms the in-memory save */ }
+      window.clearTimeout(state.saveTimer);
+      elements.saveToast.hidden = false;
+      state.saveTimer = window.setTimeout(() => { elements.saveToast.hidden = true; }, 4800);
+      announce("已保存为模型。");
+    }
+
+    function returnFromResult() {
+      if (elements.editor.classList.contains("has-result")) {
+        elements.editor.classList.remove("has-result");
+        elements.modelPane.hidden = true;
+        elements.selectionStage.focus();
+        return;
+      }
+      if (state.uploads.image) elements.imageInput.click();
+      else if (window.history.length > 1) window.history.back();
+    }
+
     elements.serviceEndpoint.addEventListener("input", updateEndpointDisplay);
     elements.serviceEndpoint.addEventListener("change", saveEndpoints);
     elements.checkButton.addEventListener("click", runSequentialChecks);
-    elements.generateButton.addEventListener("click", generateArtifact);
-    elements.cancelButton.addEventListener("click", () => {
-      if (state.currentController) state.currentController.abort();
+    elements.generateButton.addEventListener("click", openGenerationConfirmation);
+    elements.confirmGenerateButton.addEventListener("click", () => {
+      consumeCredits();
+      closeDialog(elements.creditDialog);
+      void generateArtifact();
     });
+    elements.cancelGenerateButton.addEventListener("click", () => closeDialog(elements.creditDialog));
+    elements.returnEditButton.addEventListener("click", () => closeDialog(elements.failureDialog));
+    elements.retryGenerateButton.addEventListener("click", () => void generateArtifact());
+    elements.generatingDialog.addEventListener("cancel", (event) => event.preventDefault());
+    elements.cancelButton.addEventListener("click", () => { if (state.currentController) state.currentController.abort(); });
     elements.openServiceButton.addEventListener("click", () => openEndpoint("service"));
+    elements.settingsButton.addEventListener("click", () => openDialog(elements.settingsDrawer));
+    elements.closeSettingsButton.addEventListener("click", () => closeDialog(elements.settingsDrawer));
     elements.clearLogButton.addEventListener("click", () => {
       elements.logList.replaceChildren();
       const empty = document.createElement("li");
@@ -2460,6 +1839,7 @@
       void acceptImage(file);
     });
     elements.replaceImageButton.addEventListener("click", () => elements.imageInput.click());
+    elements.rotateButton.addEventListener("click", () => void rotateImage());
     elements.undoPointButton.addEventListener("click", undoPoint);
     elements.clearPointsButton.addEventListener("click", clearPoints);
     elements.selectionStage.addEventListener("click", handleSelectionClick);
@@ -2468,23 +1848,78 @@
       state.keyboardMode = false;
       renderPoints();
     });
-    for (const mode of document.querySelectorAll('input[name="selection-mode"]')) {
-      mode.addEventListener("change", renderPoints);
-    }
-    elements.seed.addEventListener("input", () => {
-      if (elements.seed.validity.valid) hideRuntimeNotice();
+    elements.aiToggle.addEventListener("change", () => {
+      elements.selectionStage.setAttribute("aria-disabled", String(!elements.aiToggle.checked));
+      validateSelection();
+      announce(elements.aiToggle.checked ? "AI 捕捉已开启。" : "AI 捕捉已关闭。");
     });
+    for (const mode of document.querySelectorAll('input[name="selection-mode"]')) {
+      mode.addEventListener("change", () => {
+        renderPoints();
+        validateSelection();
+      });
+    }
+    for (const tool of document.querySelectorAll("[data-tool]")) tool.addEventListener("click", () => selectTool(tool));
+    elements.seed.addEventListener("input", () => { if (elements.seed.validity.valid) hideRuntimeNotice(); });
+    elements.backButton.addEventListener("click", returnFromResult);
+    elements.exitButton.addEventListener("click", () => {
+      if (!state.uploads.image || window.confirm("退出编辑将清空当前图片与选区，是否继续？")) resetImageState();
+    });
+    elements.saveButton.addEventListener("click", saveCurrentModel);
+    elements.viewSavedButton.addEventListener("click", () => {
+      elements.saveToast.hidden = true;
+      if (state.resultUrl) {
+        elements.modelPane.hidden = false;
+        elements.editor.classList.add("has-result");
+        elements.modelStage.focus();
+      }
+    });
+    elements.fullscreenButton.addEventListener("click", async () => {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await elements.modelPane.requestFullscreen();
+      } catch (error) {
+        showRuntimeNotice("无法进入全屏", "当前浏览器不允许全屏显示。", "warn");
+      }
+    });
+    elements.modelStage.addEventListener("pointerdown", (event) => {
+      if (!state.modelPoints) return;
+      elements.modelStage.setPointerCapture(event.pointerId);
+      state.modelDrag = { x: event.clientX, y: event.clientY, rx: state.modelRotation.x, ry: state.modelRotation.y };
+    });
+    elements.modelStage.addEventListener("pointermove", (event) => {
+      if (!state.modelDrag) return;
+      state.modelRotation.y = state.modelDrag.ry + (event.clientX - state.modelDrag.x) * 0.008;
+      state.modelRotation.x = Math.max(-1.35, Math.min(1.35, state.modelDrag.rx + (event.clientY - state.modelDrag.y) * 0.008));
+      drawPointCloud();
+    });
+    const finishModelDrag = () => { state.modelDrag = null; };
+    elements.modelStage.addEventListener("pointerup", finishModelDrag);
+    elements.modelStage.addEventListener("pointercancel", finishModelDrag);
+    elements.modelStage.addEventListener("wheel", (event) => {
+      if (!state.modelPoints) return;
+      event.preventDefault();
+      state.modelZoom = Math.max(0.55, Math.min(2.2, state.modelZoom * (event.deltaY > 0 ? 0.92 : 1.08)));
+      drawPointCloud();
+    }, { passive: false });
 
     elements.imagePreview.addEventListener("load", scheduleSelectionRender);
     elements.maskPreview.addEventListener("load", scheduleSelectionRender);
-    window.addEventListener("resize", scheduleSelectionRender);
+    window.addEventListener("resize", () => {
+      scheduleSelectionRender();
+      drawPointCloud();
+    });
+    document.addEventListener("fullscreenchange", drawPointCloud);
     if ("ResizeObserver" in window) {
       const selectionResizeObserver = new ResizeObserver(scheduleSelectionRender);
       selectionResizeObserver.observe(elements.selectionStage);
+      const modelResizeObserver = new ResizeObserver(drawPointCloud);
+      modelResizeObserver.observe(elements.modelStage);
     }
 
     bindDropZone(elements.imageZone);
     loadEndpoints();
+    loadCredits();
     validateSelection();
 
     window.addEventListener("beforeunload", () => {
