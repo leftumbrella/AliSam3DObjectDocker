@@ -244,16 +244,11 @@
       outline: 1px solid rgba(255, 255, 255, 0.09);
       outline-offset: -1px;
     }
-    .model-stage { position: absolute; inset: 96px 20px 134px; display: grid; place-items: center; overflow: hidden; cursor: grab; }
-    .model-stage:active { cursor: grabbing; }
-    .model-canvas { width: 100%; height: 100%; }
-    .model-fallback {
-      width: 84%;
-      height: 84%;
-      object-fit: contain;
-      filter: sepia(0.7) saturate(0.58) hue-rotate(36deg) brightness(0.95) contrast(1.18) drop-shadow(0 20px 24px rgba(0, 0, 0, 0.48));
-      transform: perspective(900px) rotateY(-9deg) rotateX(2deg);
-    }
+    .model-stage { position: absolute; inset: 96px 20px 134px; display: grid; place-items: center; overflow: hidden; }
+    .model-file-summary { display: grid; max-width: 320px; place-items: center; gap: 12px; color: var(--muted); text-align: center; }
+    .model-file-summary .icon { width: 62px; height: 62px; color: var(--green); }
+    .model-file-summary strong { color: var(--text); font-size: 18px; }
+    .model-file-summary span { font-size: 12px; line-height: 1.7; }
     .model-badge { position: absolute; top: 112px; right: 28px; padding: 6px 10px; border-radius: var(--r-pill); color: var(--muted); background: rgba(8, 15, 26, 0.72); font-size: 11px; }
     .model-actions { position: absolute; z-index: 16; right: 70px; bottom: 175px; display: flex; gap: 8px; }
     .button-link, .model-actions button { display: inline-flex; min-height: 41px; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; text-decoration: none; background: oklch(13.5% 0.026 258 / 0.94); }
@@ -427,8 +422,7 @@
     .status-label { display: block; color: var(--dim); font-size: 10px; }
     .status-value { display: block; font-weight: 620; }
     .status-detail { display: block; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-    .format-control { display: flex; flex-wrap: wrap; gap: 8px; }
-    .format-option { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
+    .format-value { display: flex; min-height: 44px; align-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
     .timer { display: flex; justify-content: space-between; margin-top: 12px; color: var(--muted); }
     .timer-value { color: var(--text); font-variant-numeric: tabular-nums; }
     .log-list { max-height: 180px; margin: 10px 0 0; padding: 0; overflow: auto; list-style: none; }
@@ -512,6 +506,7 @@
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
     <symbol id="i-credit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8m-3-4h6"/></symbol>
     <symbol id="i-error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v6m0 4h.01"/></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></symbol>
   </svg>
 
   <a class="skip-link" href="#main-content">跳到编辑区域</a>
@@ -541,9 +536,9 @@
           </div>
         </div>
       </div>
-      <section class="model-pane" id="model-pane" aria-label="生成的 3D 模型" hidden>
-        <div class="model-stage" id="model-stage" tabindex="0" aria-label="可拖动旋转的 3D 模型预览"><canvas class="model-canvas" id="model-canvas" hidden></canvas><img class="model-fallback" id="model-fallback" alt="根据选区生成的模型预览" width="640" height="640" hidden></div>
-        <span class="model-badge" id="model-badge">拖动旋转 · 滚轮缩放</span>
+      <section class="model-pane" id="model-pane" aria-label="生成的 GLB 模型" hidden>
+        <div class="model-stage" id="model-stage" tabindex="0" aria-label="GLB 文件生成结果"><div class="model-file-summary"><svg class="icon"><use href="#i-cube"/></svg><strong>GLB 模型已生成</strong><span id="model-file-detail">请下载文件，或使用仓库中的 Qt 桌面客户端进行真实三维预览。</span></div></div>
+        <span class="model-badge" id="model-badge">GLB 2.0</span>
         <div class="model-actions"><a class="button-link" id="download-link" href="#" download hidden><svg class="icon"><use href="#i-download"/></svg>下载3D</a><button id="fullscreen-button" type="button"><svg class="icon"><use href="#i-fullscreen"/></svg>全屏</button></div>
       </section>
     </section>
@@ -582,7 +577,7 @@
     <aside class="save-toast" id="save-toast" role="status" hidden><span class="toast-mark"><svg class="icon"><use href="#i-check"/></svg></span><span>已保存为模型</span><button class="primary-button toast-action" id="view-saved-button" type="button">点击查看</button></aside>
     <div class="sr-data" aria-hidden="true">
       <span id="image-meta"></span><div id="mask-zone"><span id="mask-empty"></span><span id="mask-filled" hidden><img id="mask-preview" alt="函数返回的二值对象 Mask" width="1280" height="800"><span id="mask-meta"></span></span></div>
-      <strong id="result-title">尚无生成结果</strong><span id="result-meta">完成推理后可下载 PLY 或 GLB 文件。</span><span id="footer-endpoint">SERVICE: NOT SET</span>
+      <strong id="result-title">尚无生成结果</strong><span id="result-meta">完成推理后可下载 GLB 文件。</span><span id="footer-endpoint">SERVICE: NOT SET</span>
     </div>
   </main>
 
@@ -609,7 +604,7 @@
       <div class="status-row" id="status-checkpoint" data-tone="unknown"><span class="status-dot"></span><span><span class="status-label">CHECKPOINT</span><span class="status-value">尚未检查</span><span class="status-detail">GET /readyz</span></span></div>
       <div class="status-row" id="status-model" data-tone="unknown"><span class="status-dot"></span><span><span class="status-label">SAM3D WARM STATE</span><span class="status-value">尚未检查</span><span class="status-detail">等待 FC Initializer 预热</span></span></div>
     </div><div class="timer"><span>当前操作耗时</span><span class="timer-value" id="timer">00:00.0</span></div></section>
-    <section class="drawer-section advanced-grid"><fieldset style="border:0;margin:0;padding:0"><legend class="field-label">输出格式</legend><div class="format-control"><label class="format-option"><input type="radio" name="output-format" value="ply" checked>PLY</label><label class="format-option"><input type="radio" name="output-format" value="glb">GLB</label></div></fieldset><label><span class="field-label">随机种子</span><input class="seed-input" id="seed" type="number" min="0" max="2147483647" step="1" value="42"></label></section>
+    <section class="drawer-section advanced-grid"><div><span class="field-label">输出格式</span><span class="format-value">GLB 2.0（二进制 glTF）</span></div><label><span class="field-label">随机种子</span><input class="seed-input" id="seed" type="number" min="0" max="2147483647" step="1" value="42"></label></section>
     <section class="drawer-section"><div class="drawer-heading"><span>请求日志</span><button id="clear-log-button" type="button">清空</button></div><ol class="log-list" id="log-list"><li class="log-empty" id="log-empty">尚无请求。先点击“顺序检查”。</li></ol></section>
   </div></dialog>
 
@@ -633,9 +628,8 @@
       sourcePane: document.querySelector("#source-pane"),
       modelPane: document.querySelector("#model-pane"),
       modelStage: document.querySelector("#model-stage"),
-      modelCanvas: document.querySelector("#model-canvas"),
-      modelFallback: document.querySelector("#model-fallback"),
       modelBadge: document.querySelector("#model-badge"),
+      modelFileDetail: document.querySelector("#model-file-detail"),
       fullscreenButton: document.querySelector("#fullscreen-button"),
       serviceEndpoint: document.querySelector("#service-endpoint"),
       checkButton: document.querySelector("#check-button"),
@@ -716,10 +710,6 @@
       resultUrl: null,
       resultBlob: null,
       resultFormat: null,
-      modelPoints: null,
-      modelRotation: { x: -0.12, y: -0.32 },
-      modelZoom: 1,
-      modelDrag: null,
       credits: 635,
       logCount: 0,
       noticeTimer: null,
@@ -1048,11 +1038,6 @@
       });
     }
 
-    function getSelectedFormat() {
-      const checked = document.querySelector('input[name="output-format"]:checked');
-      return checked ? checked.value : "ply";
-    }
-
     function openGenerationConfirmation() {
       const validation = validateSelection();
       if (!validation.valid) {
@@ -1087,22 +1072,20 @@
       }
       closeDialog(elements.failureDialog);
       openDialog(elements.generatingDialog);
-      const outputFormat = getSelectedFormat();
       await runOperation("generate", async (signal) => {
         const form = new FormData();
         form.append("image", state.uploads.image.file, state.uploads.image.file.name);
         form.append("mask", state.uploads.mask.file, "mask.png");
         form.append("seed", String(seedValue));
-        form.append("output_format", outputFormat);
         elements.resultTitle.textContent = "正在生成 3D 文件";
         elements.resultMeta.textContent = "请保持页面打开。请求只使用当前已确认的 Mask。";
         const result = await apiRequest("threeD", "/generate", { method: "POST", body: form, expectBlob: true, signal });
         if (!(result.payload instanceof Blob) || result.payload.size === 0) throw new Error("服务返回了空文件。");
         if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
         state.resultBlob = result.payload;
-        state.resultFormat = outputFormat;
+        state.resultFormat = "glb";
         state.resultUrl = URL.createObjectURL(result.payload);
-        const filename = `sam3d-result.${outputFormat}`;
+        const filename = "sam3d-result.glb";
         elements.downloadLink.href = state.resultUrl;
         elements.downloadLink.download = filename;
         elements.downloadLink.hidden = false;
@@ -1110,7 +1093,7 @@
         elements.resultMeta.textContent = `${formatBytes(result.payload.size)} · ${formatElapsed(result.elapsed)} · seed ${seedValue}`;
         updateStatus("model", "good", "3D 模型已预热", "本次推理已完成");
         closeDialog(elements.generatingDialog);
-        await revealModelResult(result.payload, outputFormat);
+        await revealModelResult(result.payload);
         announce("3D 模型已生成，可以下载或保存。");
       });
     }
@@ -1174,7 +1157,6 @@
       state.resultUrl = null;
       state.resultBlob = null;
       state.resultFormat = null;
-      state.modelPoints = null;
       elements.downloadLink.removeAttribute("href");
       elements.downloadLink.hidden = true;
       elements.resultTitle.textContent = "3D 结果已失效";
@@ -1632,151 +1614,17 @@
       announce(`已切换到${label}。`);
     }
 
-    function readPlyScalar(view, offset, type, littleEndian) {
-      const readers = {
-        char: [1, "getInt8"], int8: [1, "getInt8"], uchar: [1, "getUint8"], uint8: [1, "getUint8"],
-        short: [2, "getInt16"], int16: [2, "getInt16"], ushort: [2, "getUint16"], uint16: [2, "getUint16"],
-        int: [4, "getInt32"], int32: [4, "getInt32"], uint: [4, "getUint32"], uint32: [4, "getUint32"],
-        float: [4, "getFloat32"], float32: [4, "getFloat32"], double: [8, "getFloat64"], float64: [8, "getFloat64"]
-      };
-      const entry = readers[type];
-      if (!entry) throw new Error(`不支持的 PLY 属性类型：${type}`);
-      const value = entry[0] === 1 ? view[entry[1]](offset) : view[entry[1]](offset, littleEndian);
-      return { value, size: entry[0] };
-    }
-
-    async function parsePly(blob) {
-      const buffer = await blob.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      const probe = new TextDecoder("ascii").decode(bytes.subarray(0, Math.min(bytes.length, 1024 * 1024)));
-      const marker = probe.indexOf("end_header");
-      if (marker < 0) throw new Error("PLY 文件缺少头部结束标记");
-      let dataOffset = marker + "end_header".length;
-      while (bytes[dataOffset] === 10 || bytes[dataOffset] === 13) dataOffset += 1;
-      const header = probe.slice(0, marker).split(/\r?\n/);
-      const formatLine = header.find((line) => line.startsWith("format ")) || "";
-      const format = formatLine.split(/\s+/)[1];
-      let vertexCount = 0;
-      let inVertices = false;
-      const properties = [];
-      for (const line of header) {
-        const parts = line.trim().split(/\s+/);
-        if (parts[0] === "element") {
-          inVertices = parts[1] === "vertex";
-          if (inVertices) vertexCount = Number(parts[2]);
-        } else if (inVertices && parts[0] === "property" && parts[1] !== "list") {
-          properties.push({ type: parts[1], name: parts[2] });
-        }
-      }
-      if (!vertexCount || !properties.some((item) => item.name === "x") || !properties.some((item) => item.name === "y") || !properties.some((item) => item.name === "z")) throw new Error("PLY 文件不包含有效顶点");
-      const strideStep = Math.max(1, Math.ceil(vertexCount / 12000));
-      const points = [];
-      if (format === "ascii") {
-        const rows = new TextDecoder().decode(bytes.subarray(dataOffset)).trim().split(/\r?\n/);
-        const index = Object.fromEntries(properties.map((property, propertyIndex) => [property.name, propertyIndex]));
-        for (let rowIndex = 0; rowIndex < Math.min(vertexCount, rows.length); rowIndex += strideStep) {
-          const values = rows[rowIndex].trim().split(/\s+/).map(Number);
-          points.push({ x: values[index.x], y: values[index.y], z: values[index.z], r: values[index.red], g: values[index.green], b: values[index.blue] });
-        }
-      } else if (format === "binary_little_endian" || format === "binary_big_endian") {
-        const littleEndian = format === "binary_little_endian";
-        const scratch = new DataView(new ArrayBuffer(8));
-        const sizes = properties.map((property) => readPlyScalar(scratch, 0, property.type, true).size);
-        const vertexStride = sizes.reduce((sum, size) => sum + size, 0);
-        const view = new DataView(buffer);
-        for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += strideStep) {
-          let offset = dataOffset + vertexIndex * vertexStride;
-          const point = {};
-          for (let propertyIndex = 0; propertyIndex < properties.length; propertyIndex += 1) {
-            const result = readPlyScalar(view, offset, properties[propertyIndex].type, littleEndian);
-            point[properties[propertyIndex].name] = result.value;
-            offset += result.size;
-          }
-          points.push({ x: point.x, y: point.y, z: point.z, r: point.red, g: point.green, b: point.blue });
-        }
-      } else {
-        throw new Error(`不支持的 PLY 格式：${format}`);
-      }
-      const valid = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z));
-      const min = { x: Infinity, y: Infinity, z: Infinity };
-      const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-      for (const point of valid) {
-        for (const key of ["x", "y", "z"]) {
-          min[key] = Math.min(min[key], point[key]);
-          max[key] = Math.max(max[key], point[key]);
-        }
-      }
-      const center = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
-      const scale = 2 / Math.max(max.x - min.x, max.y - min.y, max.z - min.z, 0.0001);
-      return valid.map((point) => ({ x: (point.x - center.x) * scale, y: (point.y - center.y) * scale, z: (point.z - center.z) * scale, r: point.r, g: point.g, b: point.b }));
-    }
-
-    function drawPointCloud() {
-      if (!state.modelPoints || elements.modelCanvas.hidden) return;
-      const rect = elements.modelStage.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const width = Math.max(1, Math.round(rect.width * dpr));
-      const height = Math.max(1, Math.round(rect.height * dpr));
-      if (elements.modelCanvas.width !== width || elements.modelCanvas.height !== height) {
-        elements.modelCanvas.width = width;
-        elements.modelCanvas.height = height;
-      }
-      const context = elements.modelCanvas.getContext("2d");
-      context.clearRect(0, 0, width, height);
-      const cosY = Math.cos(state.modelRotation.y);
-      const sinY = Math.sin(state.modelRotation.y);
-      const cosX = Math.cos(state.modelRotation.x);
-      const sinX = Math.sin(state.modelRotation.x);
-      const scale = Math.min(width, height) * 0.35 * state.modelZoom;
-      const projected = [];
-      for (const point of state.modelPoints) {
-        const rx = point.x * cosY - point.z * sinY;
-        const rz = point.x * sinY + point.z * cosY;
-        const ry = point.y * cosX - rz * sinX;
-        const depth = point.y * sinX + rz * cosX;
-        const perspective = 2.8 / Math.max(1.4, 3.2 + depth);
-        projected.push({ x: width / 2 + rx * scale * perspective, y: height / 2 - ry * scale * perspective, z: depth, color: Number.isFinite(point.r) ? `rgb(${point.r},${point.g},${point.b})` : null });
-      }
-      projected.sort((a, b) => a.z - b.z);
-      for (const point of projected) {
-        const light = Math.max(0, Math.min(1, (point.z + 1) / 2));
-        context.fillStyle = point.color || `rgb(${Math.round(116 + light * 54)}, ${Math.round(137 + light * 54)}, ${Math.round(91 + light * 44)})`;
-        const size = Math.max(1.2, (1.5 + light * 1.8) * dpr);
-        context.fillRect(point.x, point.y, size, size);
-      }
-    }
-
-    async function revealModelResult(blob, format) {
+    async function revealModelResult(blob) {
+      const header = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+      const isGlb = header.length === 12
+        && header[0] === 0x67 && header[1] === 0x6c && header[2] === 0x54 && header[3] === 0x46
+        && header[4] === 2 && header[5] === 0 && header[6] === 0 && header[7] === 0;
+      if (!isGlb) throw new Error("服务返回的文件不是有效的 GLB 2.0 模型。");
       elements.modelPane.hidden = false;
       elements.editor.classList.add("has-result");
       await new Promise((resolve) => window.requestAnimationFrame(resolve));
-      state.modelPoints = null;
-      elements.modelCanvas.hidden = true;
-      elements.modelFallback.hidden = true;
-      if (format === "ply") {
-        try {
-          state.modelPoints = await parsePly(blob);
-          elements.modelCanvas.hidden = false;
-          elements.modelBadge.textContent = "拖动旋转 · 滚轮缩放";
-          drawPointCloud();
-          return;
-        } catch (error) {
-          elements.modelBadge.textContent = "对象预览";
-        }
-      }
-      elements.modelFallback.src = elements.imagePreview.src;
-      const maskUrl = state.uploads.mask && state.uploads.mask.url;
-      if (maskUrl) {
-        elements.modelFallback.style.maskImage = `url("${maskUrl}")`;
-        elements.modelFallback.style.webkitMaskImage = `url("${maskUrl}")`;
-        elements.modelFallback.style.maskSize = "contain";
-        elements.modelFallback.style.webkitMaskSize = "contain";
-        elements.modelFallback.style.maskPosition = "center";
-        elements.modelFallback.style.webkitMaskPosition = "center";
-        elements.modelFallback.style.maskRepeat = "no-repeat";
-        elements.modelFallback.style.webkitMaskRepeat = "no-repeat";
-      }
-      elements.modelFallback.hidden = false;
+      elements.modelBadge.textContent = "GLB 2.0";
+      elements.modelFileDetail.textContent = `${formatBytes(blob.size)} · 文件头校验通过 · 可在 Qt 桌面客户端中交互预览`;
     }
 
     function saveCurrentModel() {
@@ -1882,39 +1730,14 @@
         showRuntimeNotice("无法进入全屏", "当前浏览器不允许全屏显示。", "warn");
       }
     });
-    elements.modelStage.addEventListener("pointerdown", (event) => {
-      if (!state.modelPoints) return;
-      elements.modelStage.setPointerCapture(event.pointerId);
-      state.modelDrag = { x: event.clientX, y: event.clientY, rx: state.modelRotation.x, ry: state.modelRotation.y };
-    });
-    elements.modelStage.addEventListener("pointermove", (event) => {
-      if (!state.modelDrag) return;
-      state.modelRotation.y = state.modelDrag.ry + (event.clientX - state.modelDrag.x) * 0.008;
-      state.modelRotation.x = Math.max(-1.35, Math.min(1.35, state.modelDrag.rx + (event.clientY - state.modelDrag.y) * 0.008));
-      drawPointCloud();
-    });
-    const finishModelDrag = () => { state.modelDrag = null; };
-    elements.modelStage.addEventListener("pointerup", finishModelDrag);
-    elements.modelStage.addEventListener("pointercancel", finishModelDrag);
-    elements.modelStage.addEventListener("wheel", (event) => {
-      if (!state.modelPoints) return;
-      event.preventDefault();
-      state.modelZoom = Math.max(0.55, Math.min(2.2, state.modelZoom * (event.deltaY > 0 ? 0.92 : 1.08)));
-      drawPointCloud();
-    }, { passive: false });
-
     elements.imagePreview.addEventListener("load", scheduleSelectionRender);
     elements.maskPreview.addEventListener("load", scheduleSelectionRender);
     window.addEventListener("resize", () => {
       scheduleSelectionRender();
-      drawPointCloud();
     });
-    document.addEventListener("fullscreenchange", drawPointCloud);
     if ("ResizeObserver" in window) {
       const selectionResizeObserver = new ResizeObserver(scheduleSelectionRender);
       selectionResizeObserver.observe(elements.selectionStage);
-      const modelResizeObserver = new ResizeObserver(drawPointCloud);
-      modelResizeObserver.observe(elements.modelStage);
     }
 
     bindDropZone(elements.imageZone);

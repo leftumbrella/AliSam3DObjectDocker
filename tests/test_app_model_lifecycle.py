@@ -72,8 +72,7 @@ class Sam3DModelLifecycleTests(unittest.TestCase):
                         image=image,
                         mask=mask,
                         seed=42,
-                        output_format="ply",
-                        output_path=Path(directory) / "result.ply",
+                        output_path=Path(directory) / "result.glb",
                     )
                 )
             initialize.assert_not_awaited()

@@ -1,8 +1,8 @@
 # SAM 3 + SAM 3D Objects on Alibaba Cloud Function Compute
 
-本项目把 SAM 3 点选分割和 SAM 3D Objects 重建放进同一个阿里云函数计算（FC）GPU 函数。浏览器只配置一个 HTTP 地址：鼠标点选调用 `POST /segment` 得到 Mask，再把原图和 Mask 交给同一地址的 `POST /generate`，返回 PLY 或 GLB。
+本项目把 SAM 3 点选分割和 SAM 3D Objects 重建放进同一个阿里云函数计算（FC）GPU 函数。浏览器或桌面客户端只配置一个 HTTP 地址：鼠标点选调用 `POST /segment` 得到 Mask，再把原图和 Mask 交给同一地址的 `POST /generate`，统一返回 GLB。
 
-仓库同时提供按 `design` 设计稿实现的独立 [Qt C++ 桌面客户端](qt-client/README.md)，支持显微图选区、完整生成状态以及 OBJ/PLY 模型旋转、缩放、平移、全屏与导出。
+仓库同时提供按 `design` 设计稿实现的独立 [Qt C++ 桌面客户端](qt-client/README.md)，支持显微图选区、完整生成状态以及 GLB 模型旋转、缩放、平移、全屏与导出。
 
 从香港 ECS 或本地电脑的 WSL2 Ubuntu 上传离线资源并推送镜像时，请直接阅读 [香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)；两种环境都必须使用 OSS 和 ACR 公网地址。
 
@@ -151,7 +151,7 @@ docker manifest inspect --verbose "$REMOTE_IMAGE" | grep -q 'unknown/unknown' &&
 | GET | `/gpu` | 聚合两个运行时的 CUDA 版本与显存指标 |
 | POST | `/initialize` | 仅供 FC Initializer 调用，串行完成两套模型的 GPU 加载 |
 | POST | `/segment` | 原图 + 点选 JSON，返回 PNG Mask |
-| POST | `/generate` | 原图 + Mask，返回 PLY 或 GLB |
+| POST | `/generate` | 原图 + Mask，返回 GLB |
 | POST | `/invoke` | 提示使用同一 HTTP 触发器的业务路由 |
 
 分割请求示例：
@@ -170,7 +170,6 @@ curl -fS -X POST "$FC_URL/generate" \
   -F 'image=@input.png' \
   -F 'mask=@mask.png' \
   -F 'seed=42' \
-  -F 'output_format=glb' \
   -o result.glb
 ```
 

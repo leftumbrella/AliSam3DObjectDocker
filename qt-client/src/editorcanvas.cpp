@@ -8,9 +8,11 @@
 #include <QFileInfo>
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QOpenGLFunctions_2_1>
 #include <QOpenGLWidget>
@@ -20,6 +22,7 @@
 #include <QPropertyAnimation>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QSettings>
 #include <QShortcut>
 #include <QStackedWidget>
 #include <QStandardPaths>
@@ -64,6 +67,7 @@ enum class IconKind {
     Save,
     Image,
     Rotate,
+    Settings,
     Cube,
     Target,
     Cursor,
@@ -113,6 +117,14 @@ QIcon makeIcon(IconKind kind, const QColor &color = Theme::text)
     case IconKind::Rotate:
         painter.drawArc(QRectF(-9, -9, 18, 18), 25 * 16, 285 * 16);
         painter.drawPolyline(QPolygonF() << QPointF(6, -10) << QPointF(10, -7) << QPointF(7, -3));
+        break;
+    case IconKind::Settings:
+        painter.drawLine(QPointF(-10, -6), QPointF(10, -6));
+        painter.drawLine(QPointF(-10, 0), QPointF(10, 0));
+        painter.drawLine(QPointF(-10, 6), QPointF(10, 6));
+        painter.drawEllipse(QPointF(-3, -6), 2, 2);
+        painter.drawEllipse(QPointF(4, 0), 2, 2);
+        painter.drawEllipse(QPointF(-1, 6), 2, 2);
         break;
     case IconKind::Cube:
         painter.drawPolygon(QPolygonF() << QPointF(0, -10) << QPointF(9, -5) << QPointF(9, 6)
@@ -307,9 +319,8 @@ class ImageSelectionView : public QWidget
 {
 public:
     struct SelectionMark {
-        QPointF normalizedCenter;
+        QPointF imagePoint;
         bool positive = true;
-        qreal scale = 1.0;
     };
 
     explicit ImageSelectionView(QWidget *parent = nullptr)
@@ -325,7 +336,36 @@ public:
     void setSourceImage(const QImage &image)
     {
         m_image = image;
+        m_maskOverlay = QImage();
         update();
+    }
+
+    void setMask(const QImage &mask)
+    {
+        if (mask.isNull()) {
+            m_maskOverlay = QImage();
+            update();
+            return;
+        }
+
+        const QImage source = mask.convertToFormat(QImage::Format_ARGB32);
+        m_maskOverlay = QImage(source.size(), QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < source.height(); ++y) {
+            const QRgb *input = reinterpret_cast<const QRgb *>(source.constScanLine(y));
+            QRgb *output = reinterpret_cast<QRgb *>(m_maskOverlay.scanLine(y));
+            for (int x = 0; x < source.width(); ++x) {
+                const int gray = qGray(input[x]);
+                const int sourceAlpha = qAlpha(input[x]);
+                const int coverage = sourceAlpha < 255 ? qMax(gray, sourceAlpha) : gray;
+                output[x] = qRgba(235, 46, 55, qRound(coverage * 0.62));
+            }
+        }
+        update();
+    }
+
+    void clearMask()
+    {
+        setMask(QImage());
     }
 
     void setSplit(bool split)
@@ -339,7 +379,15 @@ public:
     void setAddMode(bool addMode)
     {
         m_addMode = addMode;
-        setCursor(addMode ? Qt::CrossCursor : Qt::ForbiddenCursor);
+        setCursor(m_interactive ? (addMode ? Qt::CrossCursor : Qt::PointingHandCursor)
+                                : Qt::ArrowCursor);
+    }
+
+    void setInteractive(bool interactive)
+    {
+        m_interactive = interactive;
+        setCursor(interactive ? (m_addMode ? Qt::CrossCursor : Qt::PointingHandCursor)
+                              : Qt::ArrowCursor);
     }
 
     int selectionCount() const { return m_marks.size(); }
@@ -354,9 +402,24 @@ public:
         return count;
     }
 
+    QVector<Sam3dClient::Point> points() const
+    {
+        QVector<Sam3dClient::Point> result;
+        result.reserve(m_marks.size());
+        for (const SelectionMark &mark : m_marks) {
+            Sam3dClient::Point point;
+            point.x = qBound(0, qRound(mark.imagePoint.x()), qMax(0, m_image.width() - 1));
+            point.y = qBound(0, qRound(mark.imagePoint.y()), qMax(0, m_image.height() - 1));
+            point.label = mark.positive ? 1 : 0;
+            result.append(point);
+        }
+        return result;
+    }
+
     void clearSelections(bool notify = true)
     {
         m_marks.clear();
+        clearMask();
         update();
         if (notify && selectionChanged)
             selectionChanged();
@@ -375,9 +438,11 @@ public:
     void setDemoSelections(bool enabled)
     {
         m_marks.clear();
-        if (enabled) {
-            m_marks.append({QPointF(0.275, 0.31), true, 1.36});
-            m_marks.append({QPointF(0.565, 0.53), true, 1.58});
+        if (enabled && !m_image.isNull()) {
+            m_marks.append({QPointF(m_image.width() * 0.275,
+                                          m_image.height() * 0.31), true});
+            m_marks.append({QPointF(m_image.width() * 0.565,
+                                          m_image.height() * 0.53), true});
         }
         update();
     }
@@ -392,22 +457,13 @@ protected:
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         painter.fillRect(rect(), Theme::canvas);
 
-        const qreal fullWidth = m_split ? width() * 2.0 : width();
+        const qreal fullWidth = targetWidth();
         if (!m_image.isNull()) {
             const QRectF target(0, 0, fullWidth, height());
-            const qreal imageAspect = qreal(m_image.width()) / qreal(m_image.height());
-            const qreal targetAspect = target.width() / qMax<qreal>(1.0, target.height());
-            QRectF source(0, 0, m_image.width(), m_image.height());
-            if (imageAspect > targetAspect) {
-                const qreal sourceWidth = m_image.height() * targetAspect;
-                source.setLeft((m_image.width() - sourceWidth) * 0.5);
-                source.setWidth(sourceWidth);
-            } else {
-                const qreal sourceHeight = m_image.width() / targetAspect;
-                source.setTop((m_image.height() - sourceHeight) * 0.5);
-                source.setHeight(sourceHeight);
-            }
+            const QRectF source = imageSourceRect();
             painter.drawImage(target, m_image, source);
+            if (!m_maskOverlay.isNull())
+                painter.drawImage(target, m_maskOverlay, source);
         } else {
             QLinearGradient gradient(0, 0, 0, height());
             gradient.setColorAt(0, QColor(49, 61, 72));
@@ -417,50 +473,25 @@ protected:
 
         painter.fillRect(rect(), QColor(4, 9, 18, 22));
 
-        for (int index = 0; index < m_marks.size(); ++index) {
-            const SelectionMark &mark = m_marks.at(index);
-            const QPointF center(mark.normalizedCenter.x() * fullWidth,
-                                 mark.normalizedCenter.y() * height());
-            const qreal radiusX = 72.0 * mark.scale * fullWidth / 1280.0;
-            const qreal radiusY = 48.0 * mark.scale * height() / 800.0;
-            const qreal wobble = 8.0 + (index % 3) * 3.0;
-
-            QPainterPath path;
-            path.moveTo(center.x() - radiusX, center.y());
-            path.cubicTo(center.x() - radiusX * 0.9, center.y() - radiusY * 0.82,
-                         center.x() - radiusX * 0.28, center.y() - radiusY - wobble,
-                         center.x() + wobble, center.y() - radiusY * 0.94);
-            path.cubicTo(center.x() + radiusX * 0.78, center.y() - radiusY * 0.77,
-                         center.x() + radiusX + wobble, center.y() - radiusY * 0.08,
-                         center.x() + radiusX * 0.9, center.y() + wobble);
-            path.cubicTo(center.x() + radiusX * 0.72, center.y() + radiusY * 0.82,
-                         center.x() + radiusX * 0.2, center.y() + radiusY + wobble,
-                         center.x() - wobble, center.y() + radiusY * 0.92);
-            path.cubicTo(center.x() - radiusX * 0.77, center.y() + radiusY * 0.72,
-                         center.x() - radiusX - wobble, center.y() + radiusY * 0.18,
-                         center.x() - radiusX, center.y());
-            path.closeSubpath();
-
-            if (mark.positive) {
-                painter.setPen(QPen(QColor(255, 45, 52), 2.0));
-                painter.setBrush(QColor(235, 37, 45, 145));
-            } else {
-                painter.setPen(QPen(Theme::warning, 2.0, Qt::DashLine));
-                painter.setBrush(QColor(4, 10, 20, 176));
-            }
-            painter.drawPath(path);
-
-            if (!mark.positive) {
-                painter.setPen(QPen(Theme::warning, 2.0));
-                painter.drawLine(center + QPointF(-6, 0), center + QPointF(6, 0));
-            }
+        for (const SelectionMark &mark : m_marks) {
+            const QPointF center = imageToTarget(mark.imagePoint);
+            const QColor accent = mark.positive ? Theme::primary : Theme::mask;
+            painter.setPen(QPen(QColor(247, 250, 255), 2.0));
+            painter.setBrush(accent);
+            painter.drawEllipse(center, 7.0, 7.0);
+            painter.setPen(QPen(QColor(255, 255, 255), 1.6, Qt::SolidLine, Qt::RoundCap));
+            painter.drawLine(center + QPointF(-3.0, 0.0), center + QPointF(3.0, 0.0));
+            if (mark.positive)
+                painter.drawLine(center + QPointF(0.0, -3.0), center + QPointF(0.0, 3.0));
         }
     }
 
     void mousePressEvent(QMouseEvent *event) override
     {
-        if (event->button() == Qt::LeftButton) {
+        if (m_interactive
+            && (event->button() == Qt::LeftButton || event->button() == Qt::RightButton)) {
             m_pressPosition = event->localPos();
+            m_pressButton = event->button();
             m_pressed = true;
             event->accept();
             return;
@@ -470,7 +501,7 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent *event) override
     {
-        if (!m_pressed || event->button() != Qt::LeftButton) {
+        if (!m_pressed || event->button() != m_pressButton) {
             QWidget::mouseReleaseEvent(event);
             return;
         }
@@ -480,14 +511,12 @@ protected:
             return;
         }
 
-        const qreal fullWidth = m_split ? width() * 2.0 : width();
-        if (fullWidth <= 0 || height() <= 0)
+        const QPointF imagePoint = targetToImage(event->localPos());
+        if (imagePoint.x() < 0.0 || imagePoint.y() < 0.0)
             return;
         SelectionMark mark;
-        mark.normalizedCenter = QPointF(event->localPos().x() / fullWidth,
-                                        event->localPos().y() / qreal(height()));
-        mark.positive = m_addMode;
-        mark.scale = 0.92 + (m_marks.size() % 3) * 0.12;
+        mark.imagePoint = imagePoint;
+        mark.positive = m_pressButton == Qt::RightButton ? false : m_addMode;
         m_marks.append(mark);
         update();
         if (selectionChanged)
@@ -496,11 +525,57 @@ protected:
     }
 
 private:
+    qreal targetWidth() const
+    {
+        return m_split ? width() * 2.0 : width();
+    }
+
+    QRectF imageSourceRect() const
+    {
+        if (m_image.isNull() || height() <= 0 || targetWidth() <= 0)
+            return {};
+        const qreal imageAspect = qreal(m_image.width()) / qreal(m_image.height());
+        const qreal targetAspect = targetWidth() / qreal(height());
+        QRectF source(0, 0, m_image.width(), m_image.height());
+        if (imageAspect > targetAspect) {
+            const qreal sourceWidth = m_image.height() * targetAspect;
+            source.setLeft((m_image.width() - sourceWidth) * 0.5);
+            source.setWidth(sourceWidth);
+        } else {
+            const qreal sourceHeight = m_image.width() / targetAspect;
+            source.setTop((m_image.height() - sourceHeight) * 0.5);
+            source.setHeight(sourceHeight);
+        }
+        return source;
+    }
+
+    QPointF targetToImage(const QPointF &point) const
+    {
+        const QRectF source = imageSourceRect();
+        if (source.isEmpty() || point.x() < 0.0 || point.x() > targetWidth()
+            || point.y() < 0.0 || point.y() > height())
+            return QPointF(-1.0, -1.0);
+        return QPointF(source.left() + point.x() / targetWidth() * source.width(),
+                       source.top() + point.y() / qreal(height()) * source.height());
+    }
+
+    QPointF imageToTarget(const QPointF &point) const
+    {
+        const QRectF source = imageSourceRect();
+        if (source.isEmpty())
+            return {};
+        return QPointF((point.x() - source.left()) / source.width() * targetWidth(),
+                       (point.y() - source.top()) / source.height() * height());
+    }
+
     QImage m_image;
+    QImage m_maskOverlay;
     QVector<SelectionMark> m_marks;
     bool m_split = false;
     bool m_addMode = true;
+    bool m_interactive = true;
     bool m_pressed = false;
+    Qt::MouseButton m_pressButton = Qt::NoButton;
     QPointF m_pressPosition;
 };
 
@@ -624,19 +699,21 @@ protected:
             glEnd();
         }
 
-        glPointSize(float(qMax(1.2, ratio * 1.15)));
-        glBegin(GL_POINTS);
-        for (int index = 0; index < m_model->vertices.size(); ++index) {
-            const QColor color = index < m_model->colors.size()
-                                     ? m_model->colors.at(index)
-                                     : QColor(30, 210, 144);
-            glColor3f(qMin(1.0, color.redF() * 1.12),
-                      qMin(1.0, color.greenF() * 1.12),
-                      qMin(1.0, color.blueF() * 1.12));
-            const QVector3D &vertex = m_model->vertices.at(index);
-            glVertex3f(vertex.x(), vertex.y(), vertex.z());
+        if (m_model->indices.isEmpty()) {
+            glPointSize(float(qMax(1.2, ratio * 1.15)));
+            glBegin(GL_POINTS);
+            for (int index = 0; index < m_model->vertices.size(); ++index) {
+                const QColor color = index < m_model->colors.size()
+                                         ? m_model->colors.at(index)
+                                         : QColor(30, 210, 144);
+                glColor3f(qMin(1.0, color.redF() * 1.12),
+                          qMin(1.0, color.greenF() * 1.12),
+                          qMin(1.0, color.blueF() * 1.12));
+                const QVector3D &vertex = m_model->vertices.at(index);
+                glVertex3f(vertex.x(), vertex.y(), vertex.z());
+            }
+            glEnd();
         }
-        glEnd();
     }
 
     void mousePressEvent(QMouseEvent *event) override
@@ -724,12 +801,69 @@ EditorCanvas::EditorCanvas(QWidget *parent)
     setMinimumSize(1180, 720);
 
     m_sourceImage.load(QStringLiteral(":/design/sample-microbe.png"));
-    m_model.createOrganicSample();
+    m_client = new Sam3dClient(this);
+    QSettings settings;
+    const QString configuredEndpoint = qEnvironmentVariable(
+        "SAM3D_SERVICE_URL",
+        settings.value(QStringLiteral("service/endpoint"),
+                       Sam3dClient::defaultEndpoint().toString()).toString());
+    QString endpointError;
+    if (!setServiceEndpoint(QUrl(configuredEndpoint), &endpointError))
+        setServiceEndpoint(Sam3dClient::defaultEndpoint());
 
     buildInterface();
 
-    m_generationTimer.setSingleShot(true);
-    connect(&m_generationTimer, &QTimer::timeout, this, [this] { completeGeneration(); });
+    connect(m_client, &Sam3dClient::readinessFinished, this,
+            [this](bool ready, const QString &detail) {
+        m_serviceReady = ready;
+        m_serviceDetail = detail;
+        applyState(false);
+    });
+    connect(m_client, &Sam3dClient::segmentationBusyChanged, this, [this](bool busy) {
+        m_segmentBusy = busy;
+        m_imageView->setInteractive(!busy && m_aiSwitch->isChecked());
+        applyState(false);
+    });
+    connect(m_client, &Sam3dClient::segmentationFinished, this,
+            [this](const QImage &mask, const QString &score, quint64 revision) {
+        if (revision != m_selectionRevision)
+            return;
+        if (mask.size() != m_sourceImage.size()) {
+            m_maskReady = false;
+            m_selectionError = QStringLiteral("函数返回的 Mask 尺寸与原图不一致");
+            m_imageView->clearMask();
+            applyState(false);
+            return;
+        }
+        m_maskImage = mask;
+        m_maskReady = true;
+        m_selectionError.clear();
+        m_imageView->setMask(mask);
+        if (!score.isEmpty())
+            m_serviceDetail = QStringLiteral("Mask 置信度 %1").arg(score);
+        applyState(false);
+    });
+    connect(m_client, &Sam3dClient::generationFinished,
+            this, [this](const QByteArray &glb) { completeGeneration(glb); });
+    connect(m_client, &Sam3dClient::requestFailed, this,
+            [this](Sam3dClient::Operation operation,
+                   const QString &message,
+                   int,
+                   quint64 revision) {
+        if (operation == Sam3dClient::Operation::Segmentation) {
+            if (revision != m_selectionRevision)
+                return;
+            m_segmentBusy = false;
+            m_maskReady = false;
+            m_selectionError = message;
+            m_imageView->clearMask();
+            applyState(false);
+            showToast(QStringLiteral("选区计算失败"), message, false);
+        } else if (operation == Sam3dClient::Operation::Generation) {
+            m_failedBody->setText(message);
+            setState(UiState::Failed);
+        }
+    });
 
     m_toastTimer.setSingleShot(true);
     connect(&m_toastTimer, &QTimer::timeout, this, [this] {
@@ -738,9 +872,24 @@ EditorCanvas::EditorCanvas(QWidget *parent)
     });
 
     applyState(false);
+    QTimer::singleShot(0, m_client, [this] { m_client->checkReady(); });
 }
 
 EditorCanvas::~EditorCanvas() = default;
+
+bool EditorCanvas::setServiceEndpoint(const QUrl &endpoint, QString *error)
+{
+    if (!m_client || !m_client->setEndpoint(endpoint, error))
+        return false;
+    m_serviceReady = false;
+    m_serviceDetail = QStringLiteral("正在检查函数服务");
+    return true;
+}
+
+QUrl EditorCanvas::serviceEndpoint() const
+{
+    return m_client ? m_client->endpoint() : QUrl();
+}
 
 void EditorCanvas::buildInterface()
 {
@@ -855,7 +1004,10 @@ void EditorCanvas::buildInterface()
     m_imageView = new ImageSelectionView(m_contentLayer);
     m_imageView->setObjectName(QStringLiteral("ImageSelectionView"));
     m_imageView->setSourceImage(m_sourceImage);
-    m_imageView->selectionChanged = [this] { updateSelectionState(); };
+    m_imageView->selectionChanged = [this] {
+        updateSelectionState();
+        requestSegmentation();
+    };
 
     m_modelView = new ModelViewport(&m_model, m_contentLayer);
     m_modelView->hide();
@@ -973,8 +1125,13 @@ void EditorCanvas::buildStatusBar()
 
     m_generateButton = createTextButton(QStringLiteral("生成 3D 模型"), QStringLiteral("PrimaryButton"), m_statusBar);
     connect(m_generateButton, &QPushButton::clicked, this, [this] {
-        if (m_imageView->selectionCount() > 0)
+        if (m_maskReady)
             setState(UiState::CreditConfirm);
+        else
+            showToast(QStringLiteral("选区尚未完成"),
+                      m_segmentBusy ? QStringLiteral("正在等待函数返回 Mask")
+                                    : QStringLiteral("请先完成一次有效点选"),
+                      false);
     });
 }
 
@@ -990,7 +1147,7 @@ void EditorCanvas::buildToolBars()
     const QVector<QPair<QString, IconKind>> leftDefinitions = {
         {QStringLiteral("导入显微图像 (Ctrl+O)"), IconKind::Image},
         {QStringLiteral("顺时针旋转图像"), IconKind::Rotate},
-        {QStringLiteral("导入 OBJ 或 PLY 模型 (M)"), IconKind::Cube}
+        {QStringLiteral("函数服务设置"), IconKind::Settings}
     };
     for (const auto &definition : leftDefinitions) {
         QToolButton *button = createToolButton(definition.first, makeIcon(definition.second), m_leftTools);
@@ -999,7 +1156,7 @@ void EditorCanvas::buildToolBars()
     }
     connect(m_leftToolButtons.at(0), &QToolButton::clicked, this, [this] { openImage(); });
     connect(m_leftToolButtons.at(1), &QToolButton::clicked, this, [this] { rotateImage(); });
-    connect(m_leftToolButtons.at(2), &QToolButton::clicked, this, [this] { openModel(); });
+    connect(m_leftToolButtons.at(2), &QToolButton::clicked, this, [this] { configureService(); });
 
     m_centerTools = new QFrame(this);
     m_centerTools->setObjectName(QStringLiteral("ToolPanel"));
@@ -1033,6 +1190,10 @@ void EditorCanvas::buildToolBars()
         centerLayout->addWidget(button);
         if (isEditingTool)
             toolGroup->addButton(button, index);
+        if (index > 0 && index < 9) {
+            button->setEnabled(false);
+            button->setToolTip(QStringLiteral("当前真实流程使用函数点选，其他绘制工具暂未接入"));
+        }
     }
     m_centerToolButtons.first()->setChecked(true);
     connect(m_centerToolButtons.at(9), &QToolButton::clicked, this, [this] {
@@ -1050,12 +1211,15 @@ void EditorCanvas::buildToolBars()
     m_aiSwitch = new ToggleSwitch(m_aiTools);
     connect(m_aiSwitch, &QAbstractButton::toggled, this, [this](bool enabled) {
         m_statusIcon->setText(enabled ? QStringLiteral("✦") : QStringLiteral("◌"));
+        m_imageView->setInteractive(enabled && !m_segmentBusy);
+        if (!enabled)
+            m_client->cancelSegmentation();
         updateSelectionState();
     });
 
     m_downloadButton = createTextButton(QStringLiteral("下载3D"), QStringLiteral("FloatingButton"),
                                         this, makeIcon(IconKind::Download, Theme::secondary));
-    m_downloadButton->setToolTip(QStringLiteral("保存 PLY 模型"));
+    m_downloadButton->setToolTip(QStringLiteral("保存 GLB 模型"));
     connect(m_downloadButton, &QPushButton::clicked, this, [this] { saveModel(); });
 
     m_fullscreenButton = createTextButton(QStringLiteral("全屏"), QStringLiteral("FloatingButton"),
@@ -1089,24 +1253,24 @@ void EditorCanvas::buildModal()
     QLabel *confirmIcon = makeLabel(QStringLiteral("◎"), QStringLiteral("ModalIconBlue"), confirmPage);
     confirmIcon->setAlignment(Qt::AlignCenter);
     confirmIcon->setGeometry(32, 27, 48, 48);
-    QLabel *confirmTitle = makeLabel(QStringLiteral("确认生成 3D 模型"), QStringLiteral("ModalTitle"), confirmPage);
+    QLabel *confirmTitle = makeLabel(QStringLiteral("确认生成 GLB 模型"), QStringLiteral("ModalTitle"), confirmPage);
     confirmTitle->setGeometry(96, 24, 330, 32);
-    QLabel *confirmSubtitle = makeLabel(QStringLiteral("本次转换将消耗 15 积分"), QStringLiteral("ModalBody"), confirmPage);
+    QLabel *confirmSubtitle = makeLabel(QStringLiteral("将调用函数计算执行 SAM3D 重建"), QStringLiteral("ModalBody"), confirmPage);
     confirmSubtitle->setGeometry(96, 57, 300, 24);
 
     QFrame *creditPanel = new QFrame(confirmPage);
     creditPanel->setObjectName(QStringLiteral("CreditPanel"));
     creditPanel->setAttribute(Qt::WA_StyledBackground, true);
     creditPanel->setGeometry(32, 103, 436, 48);
-    QLabel *creditCurrent = makeLabel(QStringLiteral("当前 635"), QStringLiteral("ModalBody"), creditPanel);
+    QLabel *creditCurrent = makeLabel(QStringLiteral("输出 GLB 2.0"), QStringLiteral("ModalBody"), creditPanel);
     creditCurrent->setGeometry(20, 0, 105, 48);
-    QLabel *creditCost = makeLabel(QStringLiteral("本次 -15"), QStringLiteral("ModalBody"), creditPanel);
+    QLabel *creditCost = makeLabel(QStringLiteral("种子 42"), QStringLiteral("ModalBody"), creditPanel);
     creditCost->setGeometry(158, 0, 105, 48);
-    QLabel *creditAfter = makeLabel(QStringLiteral("转换后 620"), QStringLiteral("ModalBody"), creditPanel);
+    QLabel *creditAfter = makeLabel(QStringLiteral("Mask 已就绪"), QStringLiteral("ModalBody"), creditPanel);
     creditAfter->setStyleSheet(QStringLiteral("color: #4f83ff;"));
     creditAfter->setGeometry(296, 0, 120, 48);
 
-    QLabel *confirmNote = makeLabel(QStringLiteral("确认后将扣除积分并开始生成，取消不会扣除。"),
+    QLabel *confirmNote = makeLabel(QStringLiteral("确认后上传原图与当前 Mask，生成期间请保持程序运行。"),
                                     QStringLiteral("ModalBody"), confirmPage);
     confirmNote->setGeometry(32, 163, 430, 28);
     QPushButton *confirmCancel = createTextButton(QStringLiteral("取消"), QStringLiteral("ModalButton"), confirmPage);
@@ -1135,7 +1299,7 @@ void EditorCanvas::buildModal()
     m_generationProgress->setTextVisible(false);
     m_generationProgress->setRange(0, 0);
     m_generationProgress->setGeometry(88, 181, 324, 8);
-    QLabel *generatingNote = makeLabel(QStringLiteral("正在生成，请勿关闭页面"), QStringLiteral("ModalBody"), generatingPage);
+    QLabel *generatingNote = makeLabel(QStringLiteral("函数计算正在推理，请勿关闭程序"), QStringLiteral("ModalBody"), generatingPage);
     generatingNote->setAlignment(Qt::AlignCenter);
     generatingNote->setGeometry(100, 205, 300, 26);
 
@@ -1146,9 +1310,9 @@ void EditorCanvas::buildModal()
     QLabel *failedTitle = makeLabel(QStringLiteral("3D 模型生成失败"), QStringLiteral("ModalTitle"), failedPage);
     failedTitle->setAlignment(Qt::AlignCenter);
     failedTitle->setGeometry(75, 94, 350, 34);
-    QLabel *failedBody = makeLabel(QStringLiteral("生成过程未能完成，请检查网络后重新尝试"), QStringLiteral("ModalBody"), failedPage);
-    failedBody->setAlignment(Qt::AlignCenter);
-    failedBody->setGeometry(60, 136, 380, 28);
+    m_failedBody = makeLabel(QStringLiteral("生成过程未能完成，请检查网络后重新尝试"), QStringLiteral("ModalBody"), failedPage);
+    m_failedBody->setAlignment(Qt::AlignCenter);
+    m_failedBody->setGeometry(60, 136, 380, 28);
     QPushButton *failedBack = createTextButton(QStringLiteral("返回编辑"), QStringLiteral("ModalButton"), failedPage);
     failedBack->setGeometry(124, 186, 120, 44);
     QPushButton *failedRetry = createTextButton(QStringLiteral("重新生成"), QStringLiteral("PrimaryButton"), failedPage);
@@ -1272,20 +1436,35 @@ void EditorCanvas::applyState(bool animateModal)
 
     const int count = m_imageView->positiveCount();
     if (count == 0) {
-        m_statusLabel->setText(m_aiSwitch->isChecked()
-                                   ? QStringLiteral("请点击画面中的微生物进行捕捉")
-                                   : QStringLiteral("AI 捕捉已关闭，可使用手动工具创建选区"));
+        if (!m_serviceDetail.isEmpty() && !m_serviceReady)
+            m_statusLabel->setText(QStringLiteral("函数服务：%1").arg(m_serviceDetail));
+        else
+            m_statusLabel->setText(m_aiSwitch->isChecked()
+                                       ? QStringLiteral("请点击画面中的微生物，左键增加，右键减少")
+                                       : QStringLiteral("AI 捕捉已关闭"));
+    } else if (!m_selectionError.isEmpty()) {
+        m_statusLabel->setText(QStringLiteral("选区计算失败：%1").arg(m_selectionError));
+    } else if (m_segmentBusy) {
+        m_statusLabel->setText(QStringLiteral("正在通过函数计算更新选区 · POST /segment"));
+    } else if (m_maskReady) {
+        m_statusLabel->setText(QStringLiteral("函数 Mask 已更新，可继续增加或减少选区"));
     } else {
-        m_statusLabel->setText(QStringLiteral("已识别选区，可继续增加或减少选区"));
+        m_statusLabel->setText(QStringLiteral("等待函数返回选区 Mask"));
     }
 
-    m_generateButton->setEnabled(count > 0 && m_state != UiState::Generating);
+    m_generateButton->setEnabled(m_maskReady && m_state != UiState::Generating);
+    m_addButton->setEnabled(m_state != UiState::Generating);
+    m_subtractButton->setEnabled(m_state != UiState::Generating);
     m_addButton->setChecked(m_addMode);
     m_subtractButton->setChecked(!m_addMode);
     m_imageView->setAddMode(m_addMode);
+    m_imageView->setInteractive(m_aiSwitch->isChecked()
+                                && !m_segmentBusy
+                                && m_state != UiState::Generating);
 
-    m_downloadButton->setVisible(split);
-    m_fullscreenButton->setVisible(split);
+    const bool hasResult = m_state == UiState::Result && !m_model.isEmpty();
+    m_downloadButton->setVisible(hasResult);
+    m_fullscreenButton->setVisible(hasResult);
 
     const bool modalVisible = m_state == UiState::CreditConfirm
                               || m_state == UiState::Generating
@@ -1319,8 +1498,8 @@ void EditorCanvas::applyState(bool animateModal)
 
 void EditorCanvas::setState(UiState state, bool animateModal)
 {
-    if (m_state == UiState::Generating && state != UiState::Generating)
-        m_generationTimer.stop();
+    if (m_state == UiState::Generating && state != UiState::Generating && m_client)
+        m_client->cancelGeneration();
     m_state = state;
     applyState(animateModal);
 }
@@ -1346,6 +1525,13 @@ void EditorCanvas::openImage()
         return;
     }
 
+    m_client->cancelSegmentation();
+    m_client->cancelGeneration();
+    ++m_selectionRevision;
+    m_maskReady = false;
+    m_maskImage = QImage();
+    m_selectionError.clear();
+    m_model.clear();
     m_sourceImage = image;
     m_imageView->setSourceImage(m_sourceImage);
     m_imageView->clearSelections(false);
@@ -1360,8 +1546,15 @@ void EditorCanvas::rotateImage()
         return;
     QTransform transform;
     transform.rotate(90.0);
+    m_client->cancelSegmentation();
+    ++m_selectionRevision;
+    m_maskReady = false;
+    m_maskImage = QImage();
+    m_selectionError.clear();
     m_sourceImage = m_sourceImage.transformed(transform, Qt::SmoothTransformation);
     m_imageView->setSourceImage(m_sourceImage);
+    m_imageView->clearSelections(false);
+    setState(UiState::Waiting, false);
     showToast(QStringLiteral("图像已旋转"), QStringLiteral("顺时针旋转 90°"), false);
 }
 
@@ -1369,7 +1562,7 @@ void EditorCanvas::openModel()
 {
     const QString initial = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
     const QString fileName = QFileDialog::getOpenFileName(this, QStringLiteral("导入 3D 模型"), initial,
-                                                          QStringLiteral("3D 模型 (*.ply *.obj)"));
+                                                          QStringLiteral("GLB 2.0 模型 (*.glb)"));
     if (fileName.isEmpty())
         return;
 
@@ -1386,6 +1579,30 @@ void EditorCanvas::openModel()
     showToast(QStringLiteral("3D 模型已导入"), m_modelName, false);
 }
 
+void EditorCanvas::configureService()
+{
+    bool accepted = false;
+    const QString value = QInputDialog::getText(
+        this,
+        QStringLiteral("函数服务设置"),
+        QStringLiteral("SAM3 / SAM3D 组合函数地址"),
+        QLineEdit::Normal,
+        serviceEndpoint().toString(),
+        &accepted);
+    if (!accepted)
+        return;
+
+    QString error;
+    if (!setServiceEndpoint(QUrl(value.trimmed()), &error)) {
+        showToast(QStringLiteral("函数地址无效"), error, false);
+        return;
+    }
+    QSettings().setValue(QStringLiteral("service/endpoint"), serviceEndpoint().toString());
+    applyState(false);
+    m_client->checkReady();
+    showToast(QStringLiteral("函数地址已保存"), serviceEndpoint().host(), false);
+}
+
 void EditorCanvas::saveModel()
 {
     if (m_model.isEmpty()) {
@@ -1394,37 +1611,69 @@ void EditorCanvas::saveModel()
     }
 
     const QString initial = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-                            + QStringLiteral("/sam-3d-model.ply");
+                            + QStringLiteral("/sam-3d-model.glb");
     const QString fileName = QFileDialog::getSaveFileName(this, QStringLiteral("保存 3D 模型"), initial,
-                                                          QStringLiteral("PLY 模型 (*.ply)"));
+                                                          QStringLiteral("GLB 2.0 模型 (*.glb)"));
     if (fileName.isEmpty())
         return;
 
     QString output = fileName;
-    if (!output.endsWith(QStringLiteral(".ply"), Qt::CaseInsensitive))
-        output += QStringLiteral(".ply");
+    if (!output.endsWith(QStringLiteral(".glb"), Qt::CaseInsensitive))
+        output += QStringLiteral(".glb");
 
     QString error;
-    if (!m_model.savePly(output, &error)) {
+    if (!m_model.saveGlb(output, &error)) {
         showToast(QStringLiteral("模型保存失败"), error, false);
         return;
     }
     showToast(QStringLiteral("已保存为模型"), QFileInfo(output).fileName(), true);
 }
 
-void EditorCanvas::beginGeneration()
+void EditorCanvas::requestSegmentation()
 {
-    setState(UiState::Generating);
-    m_generationTimer.start(1550);
+    ++m_selectionRevision;
+    m_maskReady = false;
+    m_maskImage = QImage();
+    m_selectionError.clear();
+    m_imageView->clearMask();
+
+    const QVector<Sam3dClient::Point> points = m_imageView->points();
+    bool hasPositive = false;
+    for (const Sam3dClient::Point &point : points) {
+        if (point.label == 1) {
+            hasPositive = true;
+            break;
+        }
+    }
+    if (m_demoStateLocked || points.isEmpty() || !hasPositive) {
+        m_client->cancelSegmentation();
+        applyState(false);
+        return;
+    }
+
+    m_client->segment(m_sourceImage, points, m_selectionRevision);
 }
 
-void EditorCanvas::completeGeneration()
+void EditorCanvas::beginGeneration()
 {
-    if (m_demoStateLocked)
+    if (!m_maskReady || m_maskImage.isNull()) {
+        showToast(QStringLiteral("无法开始生成"), QStringLiteral("当前选区还没有有效 Mask"), false);
         return;
-    if (m_model.isEmpty())
-        m_model.createOrganicSample();
-    m_modelName = QStringLiteral("叶片表皮 · 微生物重建");
+    }
+    m_failedBody->setText(QStringLiteral("生成过程未能完成，请检查网络后重新尝试"));
+    setState(UiState::Generating);
+    m_client->generate(m_sourceImage, m_maskImage, 42);
+}
+
+void EditorCanvas::completeGeneration(const QByteArray &glb)
+{
+    QString error;
+    if (!m_model.loadGlbData(glb, &error)) {
+        m_failedBody->setText(QStringLiteral("GLB 解析失败：%1").arg(error));
+        setState(UiState::Failed);
+        return;
+    }
+    m_modelName = QStringLiteral("%1 · SAM3D GLB").arg(m_imageName);
     m_modelView->resetView();
     setState(UiState::Result);
 }
@@ -1480,12 +1729,17 @@ void EditorCanvas::keyPressEvent(QKeyEvent *event)
 void EditorCanvas::setDemoState(const QString &stateName)
 {
     const QString name = stateName.trimmed().toLower();
-    m_generationTimer.stop();
+    m_client->cancelSegmentation();
+    m_client->cancelGeneration();
     m_toastTimer.stop();
     m_demoStateLocked = true;
     m_savedToastVisible = false;
     m_addMode = true;
     m_imageView->setDemoSelections(name != QStringLiteral("waiting"));
+    m_maskReady = name != QStringLiteral("waiting");
+    m_selectionError.clear();
+    if (name != QStringLiteral("result") && name != QStringLiteral("saved"))
+        m_model.clear();
 
     if (name == QStringLiteral("confirm"))
         m_state = UiState::CreditConfirm;
@@ -1495,6 +1749,7 @@ void EditorCanvas::setDemoState(const QString &stateName)
         m_state = UiState::Failed;
     else if (name == QStringLiteral("result") || name == QStringLiteral("saved")) {
         m_state = UiState::Result;
+        m_model.createOrganicSample();
         m_modelName = QStringLiteral("叶片表皮 · 微生物重建");
         if (name == QStringLiteral("saved")) {
             m_savedToastVisible = true;
@@ -1506,6 +1761,7 @@ void EditorCanvas::setDemoState(const QString &stateName)
         m_state = UiState::Selected;
     } else {
         m_state = UiState::Waiting;
+        m_maskReady = false;
         m_imageView->setDemoSelections(false);
     }
     applyState(false);

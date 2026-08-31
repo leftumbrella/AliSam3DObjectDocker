@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QColor>
 #include <QString>
 #include <QVector>
@@ -14,7 +15,8 @@ public:
     QVector<quint32> indices;
 
     bool load(const QString &fileName, QString *error = nullptr);
-    bool savePly(const QString &fileName, QString *error = nullptr) const;
+    bool loadGlbData(const QByteArray &data, QString *error = nullptr);
+    bool saveGlb(const QString &fileName, QString *error = nullptr) const;
     void createOrganicSample();
     void clear();
 
@@ -22,9 +24,9 @@ public:
     int triangleCount() const;
 
 private:
-    bool loadObj(const QByteArray &data, QString *error);
-    bool loadPly(const QByteArray &data, QString *error);
     void normalizeGeometry();
     void calculateNormals();
     void ensureColors();
+
+    QByteArray m_glbData;
 };

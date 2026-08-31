@@ -5,7 +5,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -246,7 +246,6 @@ async def generate(
     image: Annotated[UploadFile, File(description="RGB/RGBA 输入图片")],
     mask: Annotated[UploadFile, File(description="非零像素表示目标对象的 Mask")],
     seed: Annotated[int, Form(ge=0, le=2_147_483_647)] = 42,
-    output_format: Annotated[Literal["ply", "glb"], Form()] = "ply",
 ) -> FileResponse:
     if not model_manager.loaded:
         raise HTTPException(
@@ -283,14 +282,13 @@ async def generate(
 
     settings.tmp_dir.mkdir(parents=True, exist_ok=True)
     request_dir = Path(tempfile.mkdtemp(prefix="request-", dir=settings.tmp_dir))
-    output_path = request_dir / f"result.{output_format}"
+    output_path = request_dir / "result.glb"
 
     try:
         await model_manager.generate(
             image=image_array,
             mask=mask_array,
             seed=seed,
-            output_format=output_format,
             output_path=output_path,
         )
     except asyncio.CancelledError:
@@ -304,12 +302,11 @@ async def generate(
         LOGGER.exception("SAM3D 推理失败")
         raise HTTPException(status_code=500, detail="SAM3D 推理失败") from exc
 
-    media_type = "application/octet-stream" if output_format == "ply" else "model/gltf-binary"
     return TemporaryFileResponse(
         path=output_path,
         cleanup_dir=request_dir,
-        media_type=media_type,
-        filename=f"sam3d-result.{output_format}",
+        media_type="model/gltf-binary",
+        filename="sam3d-result.glb",
     )
 
 

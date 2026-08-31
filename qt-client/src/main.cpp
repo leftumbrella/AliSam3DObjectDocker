@@ -1,6 +1,7 @@
 #include "editorcanvas.h"
 
 #include <QApplication>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -29,13 +30,16 @@ int main(int argc, char *argv[])
     application.setApplicationName(QStringLiteral("SAM3DQtClient"));
     application.setOrganizationName(QStringLiteral("SAM 3D"));
 
-    QString stateName = QStringLiteral("waiting");
+    QString stateName;
+    QString endpoint;
     QString screenshotPath;
     bool maximize = false;
     const QStringList arguments = application.arguments();
     for (const QString &argument : arguments) {
         if (argument.startsWith(QStringLiteral("--state=")))
             stateName = argument.mid(QStringLiteral("--state=").size());
+        else if (argument.startsWith(QStringLiteral("--endpoint=")))
+            endpoint = argument.mid(QStringLiteral("--endpoint=").size());
         else if (argument.startsWith(QStringLiteral("--screenshot=")))
             screenshotPath = argument.mid(QStringLiteral("--screenshot=").size());
         else if (argument == QStringLiteral("--maximized"))
@@ -44,7 +48,13 @@ int main(int argc, char *argv[])
 
     EditorCanvas window;
     window.resize(1280, 800);
-    window.setDemoState(stateName);
+    if (!endpoint.isEmpty()) {
+        QString error;
+        if (!window.setServiceEndpoint(QUrl(endpoint), &error))
+            qWarning() << error;
+    }
+    if (!stateName.isEmpty())
+        window.setDemoState(stateName);
 
     if (maximize) {
         window.showMaximized();

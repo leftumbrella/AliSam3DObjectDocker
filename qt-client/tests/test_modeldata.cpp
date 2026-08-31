@@ -1,12 +1,181 @@
 #include "editorcanvas.h"
 #include "modeldata.h"
 
+#include <QBuffer>
 #include <QDataStream>
 #include <QFile>
+#include <QHash>
+#include <QImage>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtTest>
+
+namespace {
+
+QByteArray minimalGlb()
+{
+    QByteArray binary;
+    QDataStream binaryStream(&binary, QIODevice::WriteOnly);
+    binaryStream.setByteOrder(QDataStream::LittleEndian);
+    binaryStream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+    binaryStream << float(-1.0f) << float(-1.0f) << float(0.0f);
+    binaryStream << float(1.0f) << float(-1.0f) << float(0.0f);
+    binaryStream << float(0.0f) << float(1.0f) << float(0.0f);
+    binaryStream << quint16(0) << quint16(1) << quint16(2);
+
+    const int bufferLength = binary.size();
+    while (binary.size() % 4)
+        binary.append('\0');
+
+    QByteArray json = QByteArrayLiteral(
+        "{\"asset\":{\"version\":\"2.0\"},"
+        "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],"
+        "\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+        "\"buffers\":[{\"byteLength\":BUFFER_LENGTH}],"
+        "\"bufferViews\":["
+        "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6}],"
+        "\"accessors\":["
+        "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+        "{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}]}"
+    );
+    json.replace("BUFFER_LENGTH", QByteArray::number(bufferLength));
+    while (json.size() % 4)
+        json.append(' ');
+
+    const quint32 totalLength = quint32(12 + 8 + json.size() + 8 + binary.size());
+    QByteArray glb;
+    QDataStream stream(&glb, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    stream << quint32(0x46546c67) << quint32(2) << totalLength;
+    stream << quint32(json.size()) << quint32(0x4e4f534a);
+    stream.writeRawData(json.constData(), json.size());
+    stream << quint32(binary.size()) << quint32(0x004e4942);
+    stream.writeRawData(binary.constData(), binary.size());
+    return glb;
+}
+
+QByteArray pngMask(const QSize &size)
+{
+    QImage mask(size, QImage::Format_Grayscale8);
+    mask.fill(255);
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    mask.save(&buffer, "PNG");
+    return bytes;
+}
+
+class FakeFunctionServer : public QObject
+{
+public:
+    FakeFunctionServer(const QSize &imageSize, const QByteArray &glb, QObject *parent = nullptr)
+        : QObject(parent), m_mask(pngMask(imageSize)), m_glb(glb)
+    {
+        connect(&m_server, &QTcpServer::newConnection, this, [this] {
+            while (m_server.hasPendingConnections()) {
+                QTcpSocket *socket = m_server.nextPendingConnection();
+                m_buffers.insert(socket, QByteArray());
+                connect(socket, &QTcpSocket::readyRead, this, [this, socket] {
+                    consume(socket);
+                });
+                connect(socket, &QTcpSocket::disconnected, this, [this, socket] {
+                    m_buffers.remove(socket);
+                    socket->deleteLater();
+                });
+                consume(socket);
+            }
+        });
+    }
+
+    bool listen()
+    {
+        return m_server.listen(QHostAddress::LocalHost, 0);
+    }
+
+    QUrl endpoint() const
+    {
+        return QUrl(QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort()));
+    }
+
+    QVector<QByteArray> segmentBodies;
+    QVector<QByteArray> generationBodies;
+
+private:
+    void consume(QTcpSocket *socket)
+    {
+        QByteArray &buffer = m_buffers[socket];
+        buffer.append(socket->readAll());
+        const int headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd < 0)
+            return;
+
+        const QList<QByteArray> headerLines = buffer.left(headerEnd).split('\n');
+        int contentLength = 0;
+        for (const QByteArray &rawLine : headerLines) {
+            const QByteArray line = rawLine.trimmed();
+            if (line.toLower().startsWith("content-length:"))
+                contentLength = line.mid(line.indexOf(':') + 1).trimmed().toInt();
+        }
+        const int requestLength = headerEnd + 4 + contentLength;
+        if (buffer.size() < requestLength)
+            return;
+
+        const QByteArray request = buffer.left(requestLength);
+        const QByteArray requestLine = headerLines.isEmpty() ? QByteArray() : headerLines.first().trimmed();
+        const QByteArray body = request.mid(headerEnd + 4, contentLength);
+        if (requestLine.startsWith("GET /readyz ")) {
+            reply(socket, QByteArrayLiteral("{\"ready\":true}"), "application/json");
+        } else if (requestLine.startsWith("POST /segment ")) {
+            segmentBodies.append(body);
+            reply(socket, m_mask, "image/png", QByteArrayLiteral("X-Segment-Score: 0.960000\r\n"));
+        } else if (requestLine.startsWith("POST /generate ")) {
+            generationBodies.append(body);
+            reply(socket, m_glb, "model/gltf-binary");
+        } else {
+            reply(socket, QByteArrayLiteral("{\"detail\":\"not found\"}"),
+                  "application/json", QByteArray(), 404, "Not Found");
+        }
+        buffer.remove(0, requestLength);
+    }
+
+    static void reply(QTcpSocket *socket,
+                      const QByteArray &body,
+                      const QByteArray &contentType,
+                      const QByteArray &extraHeaders = QByteArray(),
+                      int status = 200,
+                      const QByteArray &statusText = QByteArrayLiteral("OK"))
+    {
+        QByteArray response = "HTTP/1.1 " + QByteArray::number(status) + " " + statusText + "\r\n";
+        response += "Content-Type: " + contentType + "\r\n";
+        response += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
+        response += extraHeaders;
+        response += "Connection: close\r\n\r\n";
+        response += body;
+        socket->write(response);
+        socket->disconnectFromHost();
+    }
+
+    QTcpServer m_server;
+    QHash<QTcpSocket *, QByteArray> m_buffers;
+    QByteArray m_mask;
+    QByteArray m_glb;
+};
+
+QPushButton *buttonWithText(QWidget &parent, const QString &text)
+{
+    for (QPushButton *button : parent.findChildren<QPushButton *>()) {
+        if (button->text().contains(text))
+            return button;
+    }
+    return nullptr;
+}
+
+} // namespace
 
 class ModelDataTest : public QObject
 {
@@ -14,11 +183,10 @@ class ModelDataTest : public QObject
 
 private slots:
     void proceduralModelHasGeometry();
-    void asciiPlyRoundTrip();
-    void binaryLittleEndianPlyLoads();
-    void objLoadsAndTriangulates();
+    void glbLoadsAndRoundTrips();
+    void invalidModelIsRejected();
     void editorUsesNativeControls();
-    void editorGenerationFlow();
+    void editorUsesFunctionComputeForSelectionAndGeneration();
 };
 
 void ModelDataTest::proceduralModelHasGeometry()
@@ -33,86 +201,39 @@ void ModelDataTest::proceduralModelHasGeometry()
     QCOMPARE(model.vertices.size(), model.colors.size());
 }
 
-void ModelDataTest::asciiPlyRoundTrip()
+void ModelDataTest::glbLoadsAndRoundTrips()
 {
-    QTemporaryDir directory;
-    QVERIFY(directory.isValid());
-
-    ModelData source;
-    source.createOrganicSample();
-    const QString fileName = directory.filePath(QStringLiteral("sample.ply"));
-    QString error;
-    QVERIFY2(source.savePly(fileName, &error), qPrintable(error));
-
-    ModelData loaded;
-    QVERIFY2(loaded.load(fileName, &error), qPrintable(error));
-    QCOMPARE(loaded.vertices.size(), source.vertices.size());
-    QCOMPARE(loaded.triangleCount(), source.triangleCount());
-    QCOMPARE(loaded.colors.size(), loaded.vertices.size());
-}
-
-void ModelDataTest::binaryLittleEndianPlyLoads()
-{
-    QTemporaryDir directory;
-    QVERIFY(directory.isValid());
-    const QString fileName = directory.filePath(QStringLiteral("triangle-binary.ply"));
-    QFile file(fileName);
-    QVERIFY(file.open(QIODevice::WriteOnly));
-    file.write("ply\nformat binary_little_endian 1.0\n");
-    file.write("element vertex 3\nproperty float x\nproperty float y\nproperty float z\n");
-    file.write("element face 1\nproperty list uchar int vertex_indices\nend_header\n");
-    QDataStream stream(&file);
-    stream.setByteOrder(QDataStream::LittleEndian);
-    stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
-    stream << float(0.0f) << float(0.0f) << float(0.0f);
-    stream << float(1.0f) << float(0.0f) << float(0.0f);
-    stream << float(0.0f) << float(1.0f) << float(0.0f);
-    stream << quint8(3) << qint32(0) << qint32(1) << qint32(2);
-    file.close();
-
+    const QByteArray source = minimalGlb();
     ModelData model;
     QString error;
-    QVERIFY2(model.load(fileName, &error), qPrintable(error));
+    QVERIFY2(model.loadGlbData(source, &error), qPrintable(error));
     QCOMPARE(model.vertices.size(), 3);
     QCOMPARE(model.triangleCount(), 1);
-}
+    QCOMPARE(model.colors.size(), model.vertices.size());
 
-void ModelDataTest::objLoadsAndTriangulates()
-{
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString fileName = directory.filePath(QStringLiteral("quad.obj"));
-    QFile file(fileName);
-    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
-    file.write("v -1 -1 0 0.1 0.8 0.4\n");
-    file.write("v  1 -1 0 0.1 0.8 0.4\n");
-    file.write("v  1  1 0 0.1 0.8 0.4\n");
-    file.write("v -1  1 0 0.1 0.8 0.4\n");
-    file.write("f 1 2 3 4\n");
-    file.close();
+    const QString output = directory.filePath(QStringLiteral("triangle.glb"));
+    QVERIFY2(model.saveGlb(output, &error), qPrintable(error));
+    QFile file(output);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), source);
 
+    ModelData reloaded;
+    QVERIFY2(reloaded.load(output, &error), qPrintable(error));
+    QCOMPARE(reloaded.triangleCount(), 1);
+}
+
+void ModelDataTest::invalidModelIsRejected()
+{
     ModelData model;
     QString error;
-    QVERIFY2(model.load(fileName, &error), qPrintable(error));
-    QCOMPARE(model.vertices.size(), 4);
-    QCOMPARE(model.triangleCount(), 2);
+    QVERIFY(!model.loadGlbData(QByteArrayLiteral("not a model"), &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(model.isEmpty());
 }
 
 void ModelDataTest::editorUsesNativeControls()
-{
-    EditorCanvas editor;
-    editor.resize(1280, 800);
-    editor.show();
-    QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
-
-    QVERIFY2(editor.findChildren<QPushButton *>().size() >= 8,
-             "The editor must be backed by real interactive Qt controls, not a flattened screenshot texture.");
-    QVERIFY2(editor.findChild<QStackedWidget *>(QStringLiteral("StateModal")),
-             "Generation states must use a real modal stack.");
-    editor.close();
-}
-
-void ModelDataTest::editorGenerationFlow()
 {
     EditorCanvas editor;
     editor.resize(1280, 800);
@@ -120,33 +241,59 @@ void ModelDataTest::editorGenerationFlow()
     editor.show();
     QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
 
+    QVERIFY2(editor.findChildren<QPushButton *>().size() >= 8,
+             "The editor must use native interactive Qt controls.");
+    QVERIFY2(editor.findChild<QStackedWidget *>(QStringLiteral("StateModal")),
+             "Generation states must use a real modal stack.");
+    editor.close();
+}
+
+void ModelDataTest::editorUsesFunctionComputeForSelectionAndGeneration()
+{
+    const QImage source(QStringLiteral(":/design/sample-microbe.png"));
+    QVERIFY(!source.isNull());
+    FakeFunctionServer server(source.size(), minimalGlb());
+    QVERIFY(server.listen());
+
+    EditorCanvas editor;
+    QString endpointError;
+    QVERIFY2(editor.setServiceEndpoint(server.endpoint(), &endpointError), qPrintable(endpointError));
+    editor.resize(1280, 800);
+    editor.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
+
     QWidget *imageView = editor.findChild<QWidget *>(QStringLiteral("ImageSelectionView"));
     QVERIFY(imageView);
     QTest::mouseClick(imageView, Qt::LeftButton, Qt::NoModifier, QPoint(500, 340));
-    QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::Selected));
+    QTRY_VERIFY_WITH_TIMEOUT(server.segmentBodies.size() >= 1, 3000);
+    QVERIFY(server.segmentBodies.first().contains("name=\"points\""));
+    QVERIFY(server.segmentBodies.first().contains("\"label\":1"));
 
-    QPushButton *generateButton = nullptr;
-    for (QPushButton *button : editor.findChildren<QPushButton *>()) {
-        if (button->text() == QStringLiteral("生成 3D 模型")) {
-            generateButton = button;
-            break;
-        }
-    }
+    QPushButton *generateButton = buttonWithText(editor, QStringLiteral("生成 3D 模型"));
     QVERIFY(generateButton);
+    QTRY_VERIFY_WITH_TIMEOUT(generateButton->isEnabled(), 3000);
+
+    QPushButton *subtractButton = buttonWithText(editor, QStringLiteral("减少选区"));
+    QVERIFY(subtractButton);
+    QTest::mouseClick(subtractButton, Qt::LeftButton);
+    QTest::mouseClick(imageView, Qt::LeftButton, Qt::NoModifier, QPoint(650, 400));
+    QTRY_VERIFY_WITH_TIMEOUT(server.segmentBodies.size() >= 2, 3000);
+    QVERIFY(server.segmentBodies.last().contains("\"label\":1"));
+    QVERIFY(server.segmentBodies.last().contains("\"label\":0"));
+    QTRY_VERIFY_WITH_TIMEOUT(generateButton->isEnabled(), 3000);
+
     QTest::mouseClick(generateButton, Qt::LeftButton);
     QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::CreditConfirm));
-
-    QPushButton *confirmButton = nullptr;
-    for (QPushButton *button : editor.findChildren<QPushButton *>()) {
-        if (button->text() == QStringLiteral("确认转换")) {
-            confirmButton = button;
-            break;
-        }
-    }
+    QPushButton *confirmButton = buttonWithText(editor, QStringLiteral("确认转换"));
     QVERIFY(confirmButton);
     QTest::mouseClick(confirmButton, Qt::LeftButton);
     QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::Generating));
-    QTRY_COMPARE_WITH_TIMEOUT(int(editor.uiState()), int(EditorCanvas::UiState::Result), 2600);
+    QTRY_COMPARE_WITH_TIMEOUT(int(editor.uiState()), int(EditorCanvas::UiState::Result), 5000);
+    QCOMPARE(server.generationBodies.size(), 1);
+    QVERIFY(server.generationBodies.first().contains("name=\"image\""));
+    QVERIFY(server.generationBodies.first().contains("name=\"mask\""));
+    QVERIFY(server.generationBodies.first().contains("name=\"seed\""));
+    QVERIFY(!server.generationBodies.first().contains("output_format"));
     editor.close();
 }
 

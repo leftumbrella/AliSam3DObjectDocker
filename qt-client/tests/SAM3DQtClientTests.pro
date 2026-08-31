@@ -1,4 +1,4 @@
-QT += core gui widgets opengl testlib
+QT += core gui widgets network opengl testlib
 
 TEMPLATE = app
 TARGET = SAM3DQtClientTests
@@ -10,11 +10,13 @@ INCLUDEPATH += ../src
 SOURCES += \
     test_modeldata.cpp \
     ../src/editorcanvas.cpp \
-    ../src/modeldata.cpp
+    ../src/modeldata.cpp \
+    ../src/sam3dclient.cpp
 
 HEADERS += \
     ../src/editorcanvas.h \
-    ../src/modeldata.h
+    ../src/modeldata.h \
+    ../src/sam3dclient.h
 
 RESOURCES += ../resources.qrc
 

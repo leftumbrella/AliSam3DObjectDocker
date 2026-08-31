@@ -52,7 +52,7 @@ class BrowserTestClientContractTests(unittest.TestCase):
 
     def test_lightweight_checks_are_sequential_and_never_initialize_models(self) -> None:
         match = re.search(
-            r"async function runSequentialChecks\(\).*?function getSelectedFormat",
+            r"async function runSequentialChecks\(\).*?function openGenerationConfirmation",
             self.html,
             re.DOTALL,
         )
@@ -106,6 +106,10 @@ class BrowserTestClientContractTests(unittest.TestCase):
         self.assertIn('apiRequest("threeD", "/generate"', self.html)
         self.assertIn('id="generate-button"', self.html)
         self.assertIn("state.maskRevision === state.pointsRevision", self.html)
+        self.assertIn('const filename = "sam3d-result.glb"', self.html)
+        self.assertIn("服务返回的文件不是有效的 GLB 2.0 模型", self.html)
+        self.assertNotIn("output_format", self.html)
+        self.assertIsNone(re.search(r"\bply\b", self.html, re.IGNORECASE))
 
     def test_upload_and_download_safety_contract_is_present(self) -> None:
         self.assertIn("20 * 1024 * 1024", self.html)
@@ -136,7 +140,7 @@ class BrowserTestClientContractTests(unittest.TestCase):
             "credit-dialog",
             "generating-dialog",
             "failure-dialog",
-            "model-canvas",
+            "model-file-detail",
             "save-toast",
             "fullscreen-button",
         ):

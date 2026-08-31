@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import unittest
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import UploadFile
+from PIL import Image
 
 import app.main as gateway
 from app.segmenter_client import SegmentResult
@@ -30,10 +33,17 @@ class _FakeModelManager:
         self.loaded = False
         self.load_error = None
         self._probe = probe
+        self.generate_calls: list[dict[str, object]] = []
 
     async def initialize(self) -> None:
         await self._probe.enter()
         self.loaded = True
+
+    async def generate(self, **kwargs: object) -> None:
+        self.generate_calls.append(kwargs)
+        output_path = kwargs["output_path"]
+        assert isinstance(output_path, Path)
+        output_path.write_bytes(b"glTF\x02\x00\x00\x00\x0c\x00\x00\x00")
 
 
 class _FakeSegmenterClient:
@@ -93,6 +103,22 @@ class UnifiedGatewayTests(unittest.TestCase):
             self.assertEqual(response.body, b"png")
             self.assertEqual(response.headers["x-segment-score"], "0.900000")
 
+            image_payload = BytesIO()
+            Image.new("RGB", (2, 2), "green").save(image_payload, format="PNG")
+            mask_payload = BytesIO()
+            Image.new("L", (2, 2), 255).save(mask_payload, format="PNG")
+            model_response = await gateway.generate(
+                image=UploadFile(file=BytesIO(image_payload.getvalue()), filename="input.png"),
+                mask=UploadFile(file=BytesIO(mask_payload.getvalue()), filename="mask.png"),
+                seed=42,
+            )
+            try:
+                self.assertEqual(model_response.media_type, "model/gltf-binary")
+                self.assertEqual(model_response.filename, "sam3d-result.glb")
+                self.assertEqual(Path(model_response.path).suffix, ".glb")
+            finally:
+                shutil.rmtree(model_response._cleanup_dir, ignore_errors=True)
+
         with (
             patch.object(gateway, "model_manager", model),
             patch.object(gateway, "segmenter_client", segmenter),
@@ -101,6 +127,8 @@ class UnifiedGatewayTests(unittest.TestCase):
 
         self.assertEqual(probe.peak, 2)
         self.assertEqual(segmenter.segment_calls, 1)
+        self.assertEqual(len(model.generate_calls), 1)
+        self.assertNotIn("output_format", model.generate_calls[0])
 
 
 if __name__ == "__main__":

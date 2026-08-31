@@ -1,4 +1,4 @@
-QT += core gui widgets opengl
+QT += core gui widgets network opengl
 
 TEMPLATE = app
 TARGET = SAM3DQtClient
@@ -11,11 +11,13 @@ INCLUDEPATH += $$PWD/src
 SOURCES += \
     src/main.cpp \
     src/editorcanvas.cpp \
-    src/modeldata.cpp
+    src/modeldata.cpp \
+    src/sam3dclient.cpp
 
 HEADERS += \
     src/editorcanvas.h \
-    src/modeldata.h
+    src/modeldata.h \
+    src/sam3dclient.h
 
 RESOURCES += resources.qrc
 

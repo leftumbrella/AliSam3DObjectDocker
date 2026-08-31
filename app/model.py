@@ -86,7 +86,6 @@ class ModelManager:
         image: np.ndarray,
         mask: np.ndarray,
         seed: int,
-        output_format: str,
         output_path: Path,
     ) -> None:
         if not self.loaded:
@@ -101,7 +100,6 @@ class ModelManager:
                     image,
                     mask,
                     seed,
-                    output_format,
                     output_path,
                 )
             )
@@ -169,7 +167,6 @@ class ModelManager:
         image: np.ndarray,
         mask: np.ndarray,
         seed: int,
-        output_format: str,
         output_path: Path,
     ) -> None:
         if self._model is None:
@@ -177,18 +174,10 @@ class ModelManager:
 
         with self._gpu_lock.acquire():
             output = self._model(image, mask, seed=seed)
-            if output_format == "ply":
-                gaussian_splat = output.get("gs")
-                if gaussian_splat is None:
-                    raise RuntimeError("SAM3D 推理结果中没有 gs，无法导出 PLY")
-                gaussian_splat.save_ply(str(output_path))
-            elif output_format == "glb":
-                mesh = output.get("glb")
-                if mesh is None:
-                    raise RuntimeError("SAM3D 推理结果中没有 glb，无法导出 GLB")
-                mesh.export(str(output_path), file_type="glb")
-            else:
-                raise ValueError(f"不支持的输出格式：{output_format}")
+            mesh = output.get("glb")
+            if mesh is None:
+                raise RuntimeError("SAM3D 推理结果中没有 glb，无法导出 GLB")
+            mesh.export(str(output_path), file_type="glb")
 
         if not output_path.is_file():
             raise RuntimeError(f"推理完成，但未生成输出文件：{output_path}")

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "modeldata.h"
+#include "sam3dclient.h"
 
 #include <QIcon>
 #include <QImage>
@@ -21,6 +22,7 @@ class QPushButton;
 class QResizeEvent;
 class QStackedWidget;
 class QToolButton;
+class QUrl;
 
 class EditorCanvas : public QWidget
 {
@@ -38,6 +40,8 @@ public:
     ~EditorCanvas() override;
 
     void setDemoState(const QString &stateName);
+    bool setServiceEndpoint(const QUrl &endpoint, QString *error = nullptr);
+    QUrl serviceEndpoint() const;
     UiState uiState() const { return m_state; }
 
 protected:
@@ -68,22 +72,32 @@ private:
     void openImage();
     void rotateImage();
     void openModel();
+    void configureService();
     void saveModel();
+    void requestSegmentation();
     void beginGeneration();
-    void completeGeneration();
+    void completeGeneration(const QByteArray &glb);
     void toggleFullscreen();
     void showToast(const QString &title = QStringLiteral("已保存为模型"),
                    const QString &detail = QString(),
                    bool showAction = true);
 
     QImage m_sourceImage;
+    QImage m_maskImage;
     ModelData m_model;
+    Sam3dClient *m_client = nullptr;
     UiState m_state = UiState::Waiting;
     QString m_imageName = QStringLiteral("叶片表皮");
     QString m_modelName = QStringLiteral("SAM 有机体模型");
     bool m_addMode = true;
     bool m_savedToastVisible = false;
     bool m_demoStateLocked = false;
+    bool m_segmentBusy = false;
+    bool m_maskReady = false;
+    bool m_serviceReady = false;
+    quint64 m_selectionRevision = 0;
+    QString m_selectionError;
+    QString m_serviceDetail;
 
     QWidget *m_contentLayer = nullptr;
     ImageSelectionView *m_imageView = nullptr;
@@ -118,12 +132,12 @@ private:
     QGraphicsOpacityEffect *m_modalOpacity = nullptr;
     QPropertyAnimation *m_modalAnimation = nullptr;
     QProgressBar *m_generationProgress = nullptr;
+    QLabel *m_failedBody = nullptr;
 
     QFrame *m_toast = nullptr;
     QLabel *m_toastTitle = nullptr;
     QLabel *m_toastDetail = nullptr;
     QPushButton *m_toastAction = nullptr;
 
-    QTimer m_generationTimer;
     QTimer m_toastTimer;
 };
