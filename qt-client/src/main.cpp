@@ -14,6 +14,7 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
     QApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
     QSurfaceFormat format;
     format.setVersion(2, 1);
@@ -59,9 +60,7 @@ int main(int argc, char *argv[])
         QTimer::singleShot(900, &window, [&window, screenshotPath] {
             QFileInfo outputInfo(screenshotPath);
             QDir().mkpath(outputInfo.absolutePath());
-            QImage image = window.grab().toImage();
-            if (image.size() != window.size())
-                image = image.scaled(window.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            const QImage image = window.grab().toImage();
             const bool saved = image.save(outputInfo.absoluteFilePath());
             QCoreApplication::exit(saved ? 0 : 2);
         });

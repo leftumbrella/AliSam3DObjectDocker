@@ -1,42 +1,50 @@
 #include "editorcanvas.h"
 
+#include <QAbstractButton>
 #include <QApplication>
-#include <QCursor>
+#include <QButtonGroup>
+#include <QEasingCurve>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFont>
-#include <QFontMetrics>
-#include <QKeySequence>
+#include <QGraphicsOpacityEffect>
+#include <QHBoxLayout>
 #include <QKeyEvent>
-#include <QLineF>
+#include <QKeySequence>
+#include <QLabel>
 #include <QMouseEvent>
+#include <QOpenGLFunctions_2_1>
+#include <QOpenGLWidget>
 #include <QPainter>
 #include <QPainterPath>
+#include <QProgressBar>
+#include <QPropertyAnimation>
+#include <QPushButton>
+#include <QResizeEvent>
+#include <QShortcut>
+#include <QStackedWidget>
 #include <QStandardPaths>
-#include <QToolTip>
+#include <QToolButton>
+#include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QWindow>
 #include <QtMath>
 
-#include <algorithm>
+#include <functional>
 
 namespace Theme {
 
 const QColor canvas(7, 13, 25);
-const QColor surface(13, 20, 35, 248);
-const QColor surfaceRaised(20, 29, 47, 250);
-const QColor surfaceSoft(28, 39, 59, 236);
+const QColor surface(14, 21, 36);
+const QColor surfaceRaised(22, 31, 50);
+const QColor surfaceSoft(38, 48, 69);
 const QColor border(57, 70, 94);
-const QColor borderSoft(42, 54, 74);
-const QColor text(244, 247, 252);
-const QColor textSecondary(168, 179, 198);
-const QColor textMuted(112, 126, 148);
+const QColor text(240, 244, 251);
+const QColor secondary(171, 181, 200);
+const QColor muted(111, 125, 148);
 const QColor primary(42, 104, 255);
-const QColor primaryHover(67, 124, 255);
-const QColor mask(238, 50, 66);
-const QColor success(20, 193, 127);
+const QColor mask(235, 58, 67);
+const QColor success(53, 203, 142);
 const QColor warning(255, 179, 71);
-const QColor danger(255, 82, 99);
 
 QFont font(int pixelSize, int weight = QFont::Normal)
 {
@@ -51,799 +59,1299 @@ QFont font(int pixelSize, int weight = QFont::Normal)
 
 namespace {
 
-constexpr qreal kDesignWidth = 1280.0;
-constexpr qreal kDesignHeight = 800.0;
+enum class IconKind {
+    Back,
+    Save,
+    Image,
+    Rotate,
+    Cube,
+    Target,
+    Cursor,
+    Line,
+    Circle,
+    Lasso,
+    Angle,
+    Rectangle,
+    Ellipse,
+    Text,
+    Trash,
+    Undo,
+    Download,
+    Fullscreen
+};
 
-void roundedPanel(QPainter &painter,
-                  const QRectF &rect,
-                  qreal radius,
-                  const QColor &fill,
-                  const QColor &stroke = Qt::transparent,
-                  qreal strokeWidth = 1.0)
+QIcon makeIcon(IconKind kind, const QColor &color = Theme::text)
 {
-    painter.setPen(stroke.alpha() > 0 ? QPen(stroke, strokeWidth) : Qt::NoPen);
-    painter.setBrush(fill);
-    painter.drawRoundedRect(rect, radius, radius);
+    constexpr int logicalSize = 36;
+    constexpr qreal ratio = 2.0;
+    QPixmap pixmap(logicalSize * int(ratio), logicalSize * int(ratio));
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(color, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.translate(logicalSize / 2.0, logicalSize / 2.0);
+
+    switch (kind) {
+    case IconKind::Back:
+        painter.drawLine(QPointF(6, -8), QPointF(-3, 0));
+        painter.drawLine(QPointF(-3, 0), QPointF(6, 8));
+        break;
+    case IconKind::Save:
+        painter.drawRoundedRect(QRectF(-9, -10, 18, 20), 2, 2);
+        painter.drawRect(QRectF(-5, -9, 9, 6));
+        painter.drawRoundedRect(QRectF(-5, 2, 10, 6), 1, 1);
+        break;
+    case IconKind::Image:
+        painter.drawRoundedRect(QRectF(-10, -9, 20, 18), 3, 3);
+        painter.drawEllipse(QPointF(4, -3), 2, 2);
+        painter.drawPolyline(QPolygonF() << QPointF(-8, 6) << QPointF(-2, 0)
+                                         << QPointF(2, 4) << QPointF(5, 1) << QPointF(9, 6));
+        break;
+    case IconKind::Rotate:
+        painter.drawArc(QRectF(-9, -9, 18, 18), 25 * 16, 285 * 16);
+        painter.drawPolyline(QPolygonF() << QPointF(6, -10) << QPointF(10, -7) << QPointF(7, -3));
+        break;
+    case IconKind::Cube:
+        painter.drawPolygon(QPolygonF() << QPointF(0, -10) << QPointF(9, -5) << QPointF(9, 6)
+                                        << QPointF(0, 11) << QPointF(-9, 6) << QPointF(-9, -5));
+        painter.drawLine(QPointF(0, 0), QPointF(0, 10));
+        painter.drawLine(QPointF(0, 0), QPointF(9, -5));
+        painter.drawLine(QPointF(0, 0), QPointF(-9, -5));
+        break;
+    case IconKind::Target:
+        painter.drawEllipse(QPointF(0, 0), 9, 9);
+        painter.drawEllipse(QPointF(0, 0), 3, 3);
+        painter.drawPoint(QPointF(0, 0));
+        break;
+    case IconKind::Cursor:
+        painter.drawPolygon(QPolygonF() << QPointF(-7, -10) << QPointF(8, 2)
+                                        << QPointF(1, 4) << QPointF(4, 11)
+                                        << QPointF(0, 12) << QPointF(-3, 5) << QPointF(-8, 9));
+        break;
+    case IconKind::Line:
+        painter.drawLine(QPointF(-9, 8), QPointF(9, -8));
+        painter.drawEllipse(QPointF(-9, 8), 1.5, 1.5);
+        painter.drawEllipse(QPointF(9, -8), 1.5, 1.5);
+        break;
+    case IconKind::Circle:
+        painter.drawEllipse(QPointF(0, 0), 8, 8);
+        break;
+    case IconKind::Lasso: {
+        QPainterPath path;
+        path.moveTo(-8, 2);
+        path.cubicTo(-10, -8, 2, -11, 8, -5);
+        path.cubicTo(13, 1, 5, 8, -2, 8);
+        path.cubicTo(-5, 8, -8, 6, -8, 2);
+        painter.drawPath(path);
+        painter.drawLine(QPointF(-3, 8), QPointF(-6, 11));
+        break;
+    }
+    case IconKind::Angle:
+        painter.drawPolyline(QPolygonF() << QPointF(-9, 8) << QPointF(-3, -8) << QPointF(2, 7) << QPointF(10, 7));
+        break;
+    case IconKind::Rectangle:
+        painter.drawRoundedRect(QRectF(-9, -7, 18, 14), 2, 2);
+        break;
+    case IconKind::Ellipse:
+        painter.drawEllipse(QRectF(-10, -6, 20, 12));
+        break;
+    case IconKind::Text:
+        painter.setFont(Theme::font(20, QFont::DemiBold));
+        painter.drawText(QRectF(-12, -13, 24, 26), Qt::AlignCenter, QStringLiteral("T"));
+        break;
+    case IconKind::Trash:
+        painter.drawRoundedRect(QRectF(-7, -6, 14, 16), 2, 2);
+        painter.drawLine(QPointF(-9, -7), QPointF(9, -7));
+        painter.drawLine(QPointF(-3, -10), QPointF(3, -10));
+        painter.drawLine(QPointF(-3, -3), QPointF(-3, 6));
+        painter.drawLine(QPointF(3, -3), QPointF(3, 6));
+        break;
+    case IconKind::Undo:
+        painter.drawArc(QRectF(-8, -8, 18, 17), -75 * 16, 245 * 16);
+        painter.drawPolyline(QPolygonF() << QPointF(-10, -7) << QPointF(-10, 0) << QPointF(-3, -2));
+        break;
+    case IconKind::Download:
+        painter.drawLine(QPointF(0, -10), QPointF(0, 5));
+        painter.drawPolyline(QPolygonF() << QPointF(-5, 0) << QPointF(0, 5) << QPointF(5, 0));
+        painter.drawLine(QPointF(-9, 10), QPointF(9, 10));
+        break;
+    case IconKind::Fullscreen:
+        painter.drawPolyline(QPolygonF() << QPointF(-2, -10) << QPointF(-10, -10) << QPointF(-10, -2));
+        painter.drawPolyline(QPolygonF() << QPointF(2, -10) << QPointF(10, -10) << QPointF(10, -2));
+        painter.drawPolyline(QPolygonF() << QPointF(-10, 2) << QPointF(-10, 10) << QPointF(-2, 10));
+        painter.drawPolyline(QPolygonF() << QPointF(10, 2) << QPointF(10, 10) << QPointF(2, 10));
+        break;
+    }
+
+    painter.end();
+    QIcon icon;
+    icon.addPixmap(pixmap, QIcon::Normal, QIcon::Off);
+    return icon;
 }
 
-void centeredText(QPainter &painter,
-                  const QRectF &rect,
-                  const QString &text,
-                  const QColor &color,
-                  const QFont &font,
-                  Qt::Alignment alignment = Qt::AlignCenter)
+bool isSplitState(EditorCanvas::UiState state)
 {
-    painter.setPen(color);
-    painter.setFont(font);
-    painter.drawText(rect, alignment, text);
+    return state == EditorCanvas::UiState::CreditConfirm
+           || state == EditorCanvas::UiState::Generating
+           || state == EditorCanvas::UiState::Failed
+           || state == EditorCanvas::UiState::Result;
 }
+
+class TitleBar : public QFrame
+{
+public:
+    explicit TitleBar(QWidget *parent = nullptr)
+        : QFrame(parent)
+    {
+        setMouseTracking(true);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() != Qt::LeftButton) {
+            QFrame::mousePressEvent(event);
+            return;
+        }
+        m_dragging = true;
+        m_offset = event->globalPos() - window()->frameGeometry().topLeft();
+        event->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (m_dragging && !window()->isMaximized() && !window()->isFullScreen())
+            window()->move(event->globalPos() - m_offset);
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        m_dragging = false;
+        event->accept();
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            window()->isMaximized() ? window()->showNormal() : window()->showMaximized();
+            event->accept();
+            return;
+        }
+        QFrame::mouseDoubleClickEvent(event);
+    }
+
+private:
+    bool m_dragging = false;
+    QPoint m_offset;
+};
 
 } // namespace
 
-EditorCanvas::EditorCanvas(QWidget *parent)
-    : QOpenGLWidget(parent)
+class ToggleSwitch : public QAbstractButton
 {
-    setWindowTitle(QStringLiteral("SAM 3D 对象编辑器"));
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-    setAttribute(Qt::WA_OpaquePaintEvent);
-    setFocusPolicy(Qt::StrongFocus);
-    setMouseTracking(true);
-    setMinimumSize(960, 600);
-
-    m_sourceImage.load(QStringLiteral(":/design/sample-microbe.png"));
-    m_templateSelected.load(QStringLiteral(":/design/sample-selected.png"));
-    m_templateConfirm.load(QStringLiteral(":/design/sample-confirm.png"));
-    m_templateGenerating.load(QStringLiteral(":/design/sample-generating.png"));
-    m_templateFailed.load(QStringLiteral(":/design/sample-failed.png"));
-    m_templateSaved.load(QStringLiteral(":/design/sample-saved.png"));
-    m_model.createOrganicSample();
-
-    m_generationTimer.setSingleShot(true);
-    connect(&m_generationTimer, &QTimer::timeout, this, [this] { completeGeneration(); });
-
-    m_spinnerTimer.setInterval(82);
-    connect(&m_spinnerTimer, &QTimer::timeout, this, [this] {
-        m_loadingPhase = (m_loadingPhase + 1) % 12;
-        if (m_state == UiState::Generating)
-            update();
-    });
-    m_spinnerTimer.start();
-
-    m_toastTimer.setSingleShot(true);
-    connect(&m_toastTimer, &QTimer::timeout, this, [this] {
-        m_savedToastVisible = false;
-        update();
-    });
-
-    m_messageTimer.setSingleShot(true);
-    connect(&m_messageTimer, &QTimer::timeout, this, [this] {
-        m_transientMessage.clear();
-        update();
-    });
-}
-
-EditorCanvas::~EditorCanvas()
-{
-    if (m_overlayTexture != 0 && context()) {
-        makeCurrent();
-        glDeleteTextures(1, &m_overlayTexture);
-        m_overlayTexture = 0;
-        doneCurrent();
-    }
-}
-
-QPointF EditorCanvas::toDesign(const QPointF &point) const
-{
-    return QPointF(point.x() * kDesignWidth / qMax(1, width()),
-                   point.y() * kDesignHeight / qMax(1, height()));
-}
-
-QRectF EditorCanvas::designRect(qreal x, qreal y, qreal widthValue, qreal heightValue) const
-{
-    return QRectF(x, y, widthValue, heightValue);
-}
-
-bool EditorCanvas::isResultState() const
-{
-    return m_state == UiState::Result;
-}
-
-void EditorCanvas::initializeGL()
-{
-    initializeOpenGLFunctions();
-    glClearColor(Theme::canvas.redF(), Theme::canvas.greenF(), Theme::canvas.blueF(), 1.0f);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LEQUAL);
-    glEnable(GL_POINT_SMOOTH);
-    glEnable(GL_MULTISAMPLE);
-    glGenTextures(1, &m_overlayTexture);
-    glBindTexture(GL_TEXTURE_2D, m_overlayTexture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-void EditorCanvas::resizeGL(int widthValue, int heightValue)
-{
-    Q_UNUSED(widthValue)
-    Q_UNUSED(heightValue)
-}
-
-void EditorCanvas::paintGL()
-{
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    if (isResultState())
-        renderModel();
-
-    QImage overlay(qRound(kDesignWidth), qRound(kDesignHeight), QImage::Format_RGBA8888);
-    overlay.fill(Qt::transparent);
+public:
+    explicit ToggleSwitch(QWidget *parent = nullptr)
+        : QAbstractButton(parent)
     {
-        QPainter painter(&overlay);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setRenderHint(QPainter::TextAntialiasing, true);
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        drawScene(painter);
+        setCheckable(true);
+        setChecked(true);
+        setCursor(Qt::PointingHandCursor);
+        setFocusPolicy(Qt::StrongFocus);
+        setFixedSize(46, 26);
+        setAccessibleName(QStringLiteral("AI 捕捉微生物"));
+        setToolTip(QStringLiteral("开启或关闭 AI 捕捉"));
     }
 
-    const qreal ratio = devicePixelRatioF();
-    glViewport(0, 0, qRound(width() * ratio), qRound(height() * ratio));
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, m_overlayTexture);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, overlay.width(), overlay.height(), 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, overlay.constBits());
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
 
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-    glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 1.0f); glVertex2f(0.0f, 0.0f);
-    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 0.0f);
-    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, 1.0f);
-    glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, 1.0f);
-    glEnd();
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glDisable(GL_TEXTURE_2D);
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
-}
+        QColor track = isChecked() ? Theme::primary : QColor(60, 72, 96);
+        if (underMouse())
+            track = track.lighter(112);
+        if (isDown())
+            track = track.darker(115);
 
-void EditorCanvas::renderModel()
+        const QRectF trackRect(1, 2, width() - 2, height() - 4);
+        painter.setPen(QPen(hasFocus() ? QColor(126, 165, 255) : QColor(89, 104, 132), 1));
+        painter.setBrush(track);
+        painter.drawRoundedRect(trackRect, trackRect.height() / 2, trackRect.height() / 2);
+
+        const qreal diameter = 18;
+        const qreal x = isChecked() ? width() - diameter - 4 : 4;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(247, 250, 255));
+        painter.drawEllipse(QRectF(x, 4, diameter, diameter));
+    }
+
+    void enterEvent(QEvent *event) override
+    {
+        update();
+        QAbstractButton::enterEvent(event);
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        update();
+        QAbstractButton::leaveEvent(event);
+    }
+};
+
+class ImageSelectionView : public QWidget
 {
-    if (m_model.isEmpty())
-        return;
+public:
+    struct SelectionMark {
+        QPointF normalizedCenter;
+        bool positive = true;
+        qreal scale = 1.0;
+    };
 
-    const qreal ratio = devicePixelRatioF();
-    const int framebufferWidth = qRound(width() * ratio);
-    const int framebufferHeight = qRound(height() * ratio);
-    const int viewportX = framebufferWidth / 2;
-    const int viewportWidth = framebufferWidth - viewportX;
-    glViewport(viewportX, 0, viewportWidth, framebufferHeight);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_TEXTURE_2D);
+    explicit ImageSelectionView(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setAttribute(Qt::WA_OpaquePaintEvent);
+        setMouseTracking(true);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::CrossCursor);
+        setAccessibleName(QStringLiteral("显微图像选区画布"));
+    }
 
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    glBegin(GL_QUADS);
-    glColor3f(0.075f, 0.115f, 0.135f); glVertex2f(0.0f, 0.0f);
-    glColor3f(0.075f, 0.115f, 0.135f); glVertex2f(1.0f, 0.0f);
-    glColor3f(0.225f, 0.270f, 0.295f); glVertex2f(1.0f, 1.0f);
-    glColor3f(0.225f, 0.270f, 0.295f); glVertex2f(0.0f, 1.0f);
-    glEnd();
-    glEnable(GL_DEPTH_TEST);
+    void setSourceImage(const QImage &image)
+    {
+        m_image = image;
+        update();
+    }
 
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    const float nearPlane = 0.1f;
-    const float farPlane = 100.0f;
-    const float aspect = float(qMax(1, viewportWidth)) / float(qMax(1, framebufferHeight));
-    const float halfHeight = qTan(qDegreesToRadians(21.5f)) * nearPlane;
-    const float halfWidth = halfHeight * aspect;
-    glFrustum(-halfWidth, halfWidth, -halfHeight, halfHeight, nearPlane, farPlane);
+    void setSplit(bool split)
+    {
+        if (m_split == split)
+            return;
+        m_split = split;
+        update();
+    }
 
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    glTranslatef(float(m_pan.x() * 0.0045), float(-m_pan.y() * 0.0045), -3.25f / m_zoom);
-    glRotatef(m_rotationX, 1.0f, 0.0f, 0.0f);
-    glRotatef(m_rotationY, 0.0f, 1.0f, 0.0f);
+    void setAddMode(bool addMode)
+    {
+        m_addMode = addMode;
+        setCursor(addMode ? Qt::CrossCursor : Qt::ForbiddenCursor);
+    }
 
-    const QVector3D lightDirection = QVector3D(-0.3f, 0.55f, 0.78f).normalized();
-    if (!m_model.indices.isEmpty()) {
-        glBegin(GL_TRIANGLES);
-        for (quint32 index : m_model.indices) {
-            if (index >= quint32(m_model.vertices.size()))
-                continue;
-            const QVector3D normal = index < quint32(m_model.normals.size())
-                                         ? m_model.normals.at(int(index))
-                                         : QVector3D(0.0f, 0.0f, 1.0f);
-            const QColor color = index < quint32(m_model.colors.size())
-                                     ? m_model.colors.at(int(index))
-                                     : QColor(12, 180, 120);
-            const float shade = 0.58f + 0.42f * qMax(0.0f, QVector3D::dotProduct(normal.normalized(), lightDirection));
-            glColor3f(color.redF() * shade, color.greenF() * shade, color.blueF() * shade);
-            glNormal3f(normal.x(), normal.y(), normal.z());
-            const QVector3D &vertex = m_model.vertices.at(int(index));
+    int selectionCount() const { return m_marks.size(); }
+
+    int positiveCount() const
+    {
+        int count = 0;
+        for (const SelectionMark &mark : m_marks) {
+            if (mark.positive)
+                ++count;
+        }
+        return count;
+    }
+
+    void clearSelections(bool notify = true)
+    {
+        m_marks.clear();
+        update();
+        if (notify && selectionChanged)
+            selectionChanged();
+    }
+
+    void removeLastSelection()
+    {
+        if (m_marks.isEmpty())
+            return;
+        m_marks.removeLast();
+        update();
+        if (selectionChanged)
+            selectionChanged();
+    }
+
+    void setDemoSelections(bool enabled)
+    {
+        m_marks.clear();
+        if (enabled) {
+            m_marks.append({QPointF(0.275, 0.31), true, 1.36});
+            m_marks.append({QPointF(0.565, 0.53), true, 1.58});
+        }
+        update();
+    }
+
+    std::function<void()> selectionChanged;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.fillRect(rect(), Theme::canvas);
+
+        const qreal fullWidth = m_split ? width() * 2.0 : width();
+        if (!m_image.isNull()) {
+            const QRectF target(0, 0, fullWidth, height());
+            const qreal imageAspect = qreal(m_image.width()) / qreal(m_image.height());
+            const qreal targetAspect = target.width() / qMax<qreal>(1.0, target.height());
+            QRectF source(0, 0, m_image.width(), m_image.height());
+            if (imageAspect > targetAspect) {
+                const qreal sourceWidth = m_image.height() * targetAspect;
+                source.setLeft((m_image.width() - sourceWidth) * 0.5);
+                source.setWidth(sourceWidth);
+            } else {
+                const qreal sourceHeight = m_image.width() / targetAspect;
+                source.setTop((m_image.height() - sourceHeight) * 0.5);
+                source.setHeight(sourceHeight);
+            }
+            painter.drawImage(target, m_image, source);
+        } else {
+            QLinearGradient gradient(0, 0, 0, height());
+            gradient.setColorAt(0, QColor(49, 61, 72));
+            gradient.setColorAt(1, QColor(15, 24, 31));
+            painter.fillRect(rect(), gradient);
+        }
+
+        painter.fillRect(rect(), QColor(4, 9, 18, 22));
+
+        for (int index = 0; index < m_marks.size(); ++index) {
+            const SelectionMark &mark = m_marks.at(index);
+            const QPointF center(mark.normalizedCenter.x() * fullWidth,
+                                 mark.normalizedCenter.y() * height());
+            const qreal radiusX = 72.0 * mark.scale * fullWidth / 1280.0;
+            const qreal radiusY = 48.0 * mark.scale * height() / 800.0;
+            const qreal wobble = 8.0 + (index % 3) * 3.0;
+
+            QPainterPath path;
+            path.moveTo(center.x() - radiusX, center.y());
+            path.cubicTo(center.x() - radiusX * 0.9, center.y() - radiusY * 0.82,
+                         center.x() - radiusX * 0.28, center.y() - radiusY - wobble,
+                         center.x() + wobble, center.y() - radiusY * 0.94);
+            path.cubicTo(center.x() + radiusX * 0.78, center.y() - radiusY * 0.77,
+                         center.x() + radiusX + wobble, center.y() - radiusY * 0.08,
+                         center.x() + radiusX * 0.9, center.y() + wobble);
+            path.cubicTo(center.x() + radiusX * 0.72, center.y() + radiusY * 0.82,
+                         center.x() + radiusX * 0.2, center.y() + radiusY + wobble,
+                         center.x() - wobble, center.y() + radiusY * 0.92);
+            path.cubicTo(center.x() - radiusX * 0.77, center.y() + radiusY * 0.72,
+                         center.x() - radiusX - wobble, center.y() + radiusY * 0.18,
+                         center.x() - radiusX, center.y());
+            path.closeSubpath();
+
+            if (mark.positive) {
+                painter.setPen(QPen(QColor(255, 45, 52), 2.0));
+                painter.setBrush(QColor(235, 37, 45, 145));
+            } else {
+                painter.setPen(QPen(Theme::warning, 2.0, Qt::DashLine));
+                painter.setBrush(QColor(4, 10, 20, 176));
+            }
+            painter.drawPath(path);
+
+            if (!mark.positive) {
+                painter.setPen(QPen(Theme::warning, 2.0));
+                painter.drawLine(center + QPointF(-6, 0), center + QPointF(6, 0));
+            }
+        }
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            m_pressPosition = event->localPos();
+            m_pressed = true;
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (!m_pressed || event->button() != Qt::LeftButton) {
+            QWidget::mouseReleaseEvent(event);
+            return;
+        }
+        m_pressed = false;
+        if ((event->localPos() - m_pressPosition).manhattanLength() > 6) {
+            event->accept();
+            return;
+        }
+
+        const qreal fullWidth = m_split ? width() * 2.0 : width();
+        if (fullWidth <= 0 || height() <= 0)
+            return;
+        SelectionMark mark;
+        mark.normalizedCenter = QPointF(event->localPos().x() / fullWidth,
+                                        event->localPos().y() / qreal(height()));
+        mark.positive = m_addMode;
+        mark.scale = 0.92 + (m_marks.size() % 3) * 0.12;
+        m_marks.append(mark);
+        update();
+        if (selectionChanged)
+            selectionChanged();
+        event->accept();
+    }
+
+private:
+    QImage m_image;
+    QVector<SelectionMark> m_marks;
+    bool m_split = false;
+    bool m_addMode = true;
+    bool m_pressed = false;
+    QPointF m_pressPosition;
+};
+
+class ModelViewport : public QOpenGLWidget, protected QOpenGLFunctions_2_1
+{
+public:
+    explicit ModelViewport(ModelData *model, QWidget *parent = nullptr)
+        : QOpenGLWidget(parent), m_model(model)
+    {
+        setAttribute(Qt::WA_OpaquePaintEvent);
+        setFocusPolicy(Qt::StrongFocus);
+        setMouseTracking(true);
+        setCursor(Qt::OpenHandCursor);
+        setAccessibleName(QStringLiteral("3D 模型交互预览"));
+        setToolTip(QStringLiteral("左键旋转，右键平移，滚轮缩放，双击复位"));
+    }
+
+    void resetView()
+    {
+        m_rotationX = -14.0f;
+        m_rotationY = 26.0f;
+        m_zoom = 0.82f;
+        m_pan = QPointF();
+        update();
+    }
+
+    void rotateBy(float x, float y)
+    {
+        m_rotationX = qBound(-89.0f, m_rotationX + x, 89.0f);
+        m_rotationY += y;
+        update();
+    }
+
+    void zoomBy(float factor)
+    {
+        m_zoom = qBound(0.35f, m_zoom * factor, 4.5f);
+        update();
+    }
+
+protected:
+    void initializeGL() override
+    {
+        initializeOpenGLFunctions();
+        glClearColor(0.04f, 0.075f, 0.10f, 1.0f);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glEnable(GL_POINT_SMOOTH);
+        glEnable(GL_MULTISAMPLE);
+    }
+
+    void paintGL() override
+    {
+        const qreal ratio = devicePixelRatioF();
+        const int framebufferWidth = qRound(width() * ratio);
+        const int framebufferHeight = qRound(height() * ratio);
+        glViewport(0, 0, framebufferWidth, framebufferHeight);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glDisable(GL_DEPTH_TEST);
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        glBegin(GL_QUADS);
+        glColor3f(0.040f, 0.078f, 0.108f); glVertex2f(0.0f, 0.0f);
+        glColor3f(0.060f, 0.105f, 0.135f); glVertex2f(1.0f, 0.0f);
+        glColor3f(0.145f, 0.185f, 0.205f); glVertex2f(1.0f, 1.0f);
+        glColor3f(0.105f, 0.145f, 0.165f); glVertex2f(0.0f, 1.0f);
+        glEnd();
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glColor4f(0.35f, 0.48f, 0.55f, 0.14f);
+        glBegin(GL_LINES);
+        for (int index = 0; index <= 12; ++index) {
+            const float value = index / 12.0f;
+            glVertex2f(value, 0.0f); glVertex2f(value, 0.38f);
+            glVertex2f(0.0f, value * 0.38f); glVertex2f(1.0f, value * 0.38f);
+        }
+        glEnd();
+        glDisable(GL_BLEND);
+
+        if (!m_model || m_model->isEmpty())
+            return;
+
+        glEnable(GL_DEPTH_TEST);
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        const float nearPlane = 0.1f;
+        const float farPlane = 100.0f;
+        const float aspect = float(qMax(1, framebufferWidth)) / float(qMax(1, framebufferHeight));
+        const float halfHeight = qTan(qDegreesToRadians(21.5f)) * nearPlane;
+        const float halfWidth = halfHeight * aspect;
+        glFrustum(-halfWidth, halfWidth, -halfHeight, halfHeight, nearPlane, farPlane);
+
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        glTranslatef(float(m_pan.x() * 0.0045), float(-m_pan.y() * 0.0045), -3.25f / m_zoom);
+        glRotatef(m_rotationX, 1.0f, 0.0f, 0.0f);
+        glRotatef(m_rotationY, 0.0f, 1.0f, 0.0f);
+
+        const QVector3D lightDirection = QVector3D(-0.3f, 0.55f, 0.78f).normalized();
+        if (!m_model->indices.isEmpty()) {
+            glBegin(GL_TRIANGLES);
+            for (quint32 index : m_model->indices) {
+                if (index >= quint32(m_model->vertices.size()))
+                    continue;
+                const QVector3D normal = index < quint32(m_model->normals.size())
+                                             ? m_model->normals.at(int(index))
+                                             : QVector3D(0.0f, 0.0f, 1.0f);
+                const QColor color = index < quint32(m_model->colors.size())
+                                         ? m_model->colors.at(int(index))
+                                         : QColor(30, 181, 126);
+                const float shade = 0.56f + 0.44f * qMax(0.0f, QVector3D::dotProduct(normal.normalized(), lightDirection));
+                glColor3f(color.redF() * shade, color.greenF() * shade, color.blueF() * shade);
+                glNormal3f(normal.x(), normal.y(), normal.z());
+                const QVector3D &vertex = m_model->vertices.at(int(index));
+                glVertex3f(vertex.x(), vertex.y(), vertex.z());
+            }
+            glEnd();
+        }
+
+        glPointSize(float(qMax(1.2, ratio * 1.15)));
+        glBegin(GL_POINTS);
+        for (int index = 0; index < m_model->vertices.size(); ++index) {
+            const QColor color = index < m_model->colors.size()
+                                     ? m_model->colors.at(index)
+                                     : QColor(30, 210, 144);
+            glColor3f(qMin(1.0, color.redF() * 1.12),
+                      qMin(1.0, color.greenF() * 1.12),
+                      qMin(1.0, color.blueF() * 1.12));
+            const QVector3D &vertex = m_model->vertices.at(index);
             glVertex3f(vertex.x(), vertex.y(), vertex.z());
         }
         glEnd();
     }
 
-    glPointSize(float(qMax(1.3, ratio * 1.25)));
-    glBegin(GL_POINTS);
-    for (int index = 0; index < m_model.vertices.size(); ++index) {
-        const QColor color = index < m_model.colors.size() ? m_model.colors.at(index) : QColor(26, 219, 147);
-        glColor3f(qMin(1.0, color.redF() * 1.16),
-                  qMin(1.0, color.greenF() * 1.14),
-                  qMin(1.0, color.blueF() * 1.15));
-        const QVector3D &vertex = m_model.vertices.at(index);
-        glVertex3f(vertex.x(), vertex.y(), vertex.z());
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        m_lastPosition = event->localPos();
+        if (event->button() == Qt::LeftButton) {
+            m_rotating = true;
+            setCursor(Qt::ClosedHandCursor);
+        } else if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton) {
+            m_panning = true;
+            setCursor(Qt::SizeAllCursor);
+        }
+        setFocus(Qt::MouseFocusReason);
+        event->accept();
     }
-    glEnd();
-}
 
-void EditorCanvas::drawScene(QPainter &painter)
-{
-    if (m_usingBundledSample) {
-        if (m_state == UiState::Result && !m_savedToastVisible && !m_templateSaved.isNull()) {
-            painter.drawImage(QRectF(0, 0, 640, 800), m_templateSelected, QRectF(0, 0, 640, 800));
-            const auto drawTemplatePiece = [&painter, this](const QRectF &rect, qreal radius) {
-                painter.save();
-                QPainterPath clip;
-                clip.addRoundedRect(rect, radius, radius);
-                painter.setClipPath(clip);
-                painter.drawImage(rect, m_templateSaved, rect);
-                painter.restore();
-            };
-            drawTemplatePiece(QRectF(40, 28, 1200, 64), 20);
-            drawTemplatePiece(QRectF(150, 641, 980, 53), 14);
-            drawTemplatePiece(QRectF(150, 706, 166, 60), 15);
-            drawTemplatePiece(QRectF(327, 706, 580, 60), 15);
-            drawTemplatePiece(QRectF(919, 706, 210, 60), 15);
-            drawTemplatePiece(QRectF(862, 584, 96, 41), 10);
-            drawTemplatePiece(QRectF(966, 584, 92, 41), 10);
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        const QPointF delta = event->localPos() - m_lastPosition;
+        if (m_rotating)
+            rotateBy(float(delta.y() * 0.55), float(delta.x() * 0.55));
+        else if (m_panning) {
+            m_pan += delta;
+            update();
+        }
+        m_lastPosition = event->localPos();
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        m_rotating = false;
+        m_panning = false;
+        setCursor(Qt::OpenHandCursor);
+        event->accept();
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton)
+            resetView();
+        event->accept();
+    }
+
+    void wheelEvent(QWheelEvent *event) override
+    {
+        zoomBy(event->angleDelta().y() > 0 ? 1.11f : 0.90f);
+        event->accept();
+    }
+
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_Left) rotateBy(0.0f, -5.0f);
+        else if (event->key() == Qt::Key_Right) rotateBy(0.0f, 5.0f);
+        else if (event->key() == Qt::Key_Up) rotateBy(-5.0f, 0.0f);
+        else if (event->key() == Qt::Key_Down) rotateBy(5.0f, 0.0f);
+        else if (event->key() == Qt::Key_Plus || event->key() == Qt::Key_Equal) zoomBy(1.1f);
+        else if (event->key() == Qt::Key_Minus) zoomBy(0.9f);
+        else {
+            QOpenGLWidget::keyPressEvent(event);
             return;
         }
-        const QImage *designState = nullptr;
-        if (m_state == UiState::Waiting)
-            designState = &m_sourceImage;
-        else if (m_state == UiState::Selected)
-            designState = &m_templateSelected;
-        else if (m_state == UiState::CreditConfirm)
-            designState = &m_templateConfirm;
-        else if (m_state == UiState::Generating)
-            designState = &m_templateGenerating;
-        else if (m_state == UiState::Failed)
-            designState = &m_templateFailed;
-        else if (m_state == UiState::Result && m_savedToastVisible)
-            designState = &m_templateSaved;
-
-        if (designState && !designState->isNull()) {
-            painter.drawImage(QRectF(0, 0, kDesignWidth, kDesignHeight), *designState);
-            return;
-        }
+        event->accept();
     }
 
-    if (isResultState()) {
-        painter.fillRect(designRect(0, 0, 640, 800), Theme::canvas);
-        drawImageCover(painter, designRect(0, 0, 640, 800));
-        painter.fillRect(designRect(0, 0, 640, 800), QColor(4, 9, 18, 34));
-        drawSelections(painter, designRect(0, 0, 640, 800));
-        painter.fillRect(designRect(639, 0, 1, 800), Theme::borderSoft);
-    } else {
-        painter.fillRect(designRect(0, 0, 1280, 800), Theme::canvas);
-        drawImageCover(painter, designRect(0, 0, 1280, 800));
-        painter.fillRect(designRect(0, 0, 1280, 800), QColor(4, 9, 18, 46));
-        drawSelections(painter, designRect(0, 0, 1280, 800));
-    }
+private:
+    ModelData *m_model = nullptr;
+    float m_rotationX = -14.0f;
+    float m_rotationY = 26.0f;
+    float m_zoom = 0.82f;
+    QPointF m_pan;
+    QPointF m_lastPosition;
+    bool m_rotating = false;
+    bool m_panning = false;
+};
 
-    drawTopBar(painter);
-    if (isResultState()) {
-        drawResultOverlay(painter);
-        drawBottomEditor(painter);
-    } else {
-        drawBottomEditor(painter);
-    }
-
-    if (m_state == UiState::CreditConfirm || m_state == UiState::Generating || m_state == UiState::Failed)
-        drawModal(painter);
-    if (m_savedToastVisible)
-        drawSavedToast(painter);
-
-    if (!m_transientMessage.isEmpty()) {
-        const QRectF messageRect(460, 112, 360, 48);
-        roundedPanel(painter, messageRect, 12, QColor(19, 28, 46, 248), Theme::border);
-        centeredText(painter, messageRect.adjusted(18, 0, -18, 0), m_transientMessage, Theme::text,
-                     Theme::font(14, QFont::DemiBold));
-    }
-}
-
-void EditorCanvas::drawImageCover(QPainter &painter, const QRectF &target)
+EditorCanvas::EditorCanvas(QWidget *parent)
+    : QWidget(parent)
 {
-    if (m_sourceImage.isNull()) {
-        painter.fillRect(target, QColor(36, 48, 63));
-        return;
-    }
+    setObjectName(QStringLiteral("EditorRoot"));
+    setWindowTitle(QStringLiteral("SAM 3D 对象编辑器"));
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+    setAttribute(Qt::WA_StyledBackground, true);
+    setFocusPolicy(Qt::StrongFocus);
+    setMinimumSize(1180, 720);
 
-    const qreal imageAspect = qreal(m_sourceImage.width()) / qreal(m_sourceImage.height());
-    const qreal targetAspect = target.width() / target.height();
-    QRectF source(0, 0, m_sourceImage.width(), m_sourceImage.height());
-    if (imageAspect > targetAspect) {
-        const qreal sourceWidth = m_sourceImage.height() * targetAspect;
-        source.setLeft((m_sourceImage.width() - sourceWidth) * 0.5);
-        source.setWidth(sourceWidth);
-    } else {
-        const qreal sourceHeight = m_sourceImage.width() / targetAspect;
-        source.setTop((m_sourceImage.height() - sourceHeight) * 0.5);
-        source.setHeight(sourceHeight);
-    }
-    painter.drawImage(target, m_sourceImage, source);
-}
+    m_sourceImage.load(QStringLiteral(":/design/sample-microbe.png"));
+    m_model.createOrganicSample();
 
-void EditorCanvas::drawSelections(QPainter &painter, const QRectF &clipRect)
-{
-    painter.save();
-    painter.setClipRect(clipRect);
-    for (int index = 0; index < m_marks.size(); ++index) {
-        const SelectionMark &mark = m_marks.at(index);
-        QPainterPath path;
-        const qreal wobble = 8.0 + (index % 3) * 3.0;
-        path.moveTo(mark.center.x() - mark.radiusX, mark.center.y() + wobble * 0.2);
-        path.cubicTo(mark.center.x() - mark.radiusX * 0.88, mark.center.y() - mark.radiusY * 0.84,
-                     mark.center.x() - mark.radiusX * 0.31, mark.center.y() - mark.radiusY - wobble,
-                     mark.center.x() + wobble, mark.center.y() - mark.radiusY * 0.94);
-        path.cubicTo(mark.center.x() + mark.radiusX * 0.78, mark.center.y() - mark.radiusY * 0.78,
-                     mark.center.x() + mark.radiusX + wobble, mark.center.y() - mark.radiusY * 0.1,
-                     mark.center.x() + mark.radiusX * 0.89, mark.center.y() + wobble);
-        path.cubicTo(mark.center.x() + mark.radiusX * 0.72, mark.center.y() + mark.radiusY * 0.82,
-                     mark.center.x() + mark.radiusX * 0.2, mark.center.y() + mark.radiusY + wobble,
-                     mark.center.x() - wobble, mark.center.y() + mark.radiusY * 0.92);
-        path.cubicTo(mark.center.x() - mark.radiusX * 0.77, mark.center.y() + mark.radiusY * 0.72,
-                     mark.center.x() - mark.radiusX - wobble, mark.center.y() + mark.radiusY * 0.17,
-                     mark.center.x() - mark.radiusX, mark.center.y() + wobble * 0.2);
-        path.closeSubpath();
+    buildInterface();
 
-        if (mark.positive) {
-            painter.setBrush(QColor(Theme::mask.red(), Theme::mask.green(), Theme::mask.blue(), 132));
-            painter.setPen(QPen(QColor(255, 86, 98, 220), 1.4));
-            painter.drawPath(path);
-        } else {
-            painter.setBrush(QColor(5, 11, 20, 154));
-            painter.setPen(QPen(QColor(255, 181, 71, 230), 1.5, Qt::DashLine));
-            painter.drawPath(path);
-            drawIcon(painter, ToolIcon::Minus, mark.center, Theme::warning, 24);
-        }
-    }
-    painter.restore();
-}
+    m_generationTimer.setSingleShot(true);
+    connect(&m_generationTimer, &QTimer::timeout, this, [this] { completeGeneration(); });
 
-void EditorCanvas::drawTopBar(QPainter &painter)
-{
-    const QRectF bar(40, 28, 1200, 64);
-    roundedPanel(painter, bar, 20, Theme::surface, Theme::border, 1.0);
-
-    painter.setPen(QPen(Theme::borderSoft, 1));
-    painter.drawLine(QPointF(146, 44), QPointF(146, 76));
-
-    drawIcon(painter, ToolIcon::ArrowLeft, QPointF(88, 60), Theme::textSecondary, 18);
-    centeredText(painter, QRectF(105, 39, 38, 42), QStringLiteral("返回"), Theme::textSecondary,
-                 Theme::font(12, QFont::DemiBold), Qt::AlignVCenter | Qt::AlignLeft);
-
-    centeredText(painter, QRectF(171, 36, 352, 48),
-                 isResultState() ? QStringLiteral("编辑：%1 · 3D 预览").arg(m_imageName)
-                                 : QStringLiteral("编辑：%1").arg(m_imageName),
-                 Theme::text, Theme::font(14, QFont::DemiBold), Qt::AlignVCenter | Qt::AlignLeft);
-
-    const QRectF exitRect(638, 39, 144, 42);
-    roundedPanel(painter, exitRect, 10, Theme::surfaceSoft, Theme::borderSoft);
-    centeredText(painter, exitRect, QStringLiteral("退出编辑模式"), Theme::textSecondary,
-                 Theme::font(13, QFont::DemiBold));
-
-    const QRectF saveRect(1146, 38, 82, 44);
-    roundedPanel(painter, saveRect, 11, Theme::primary, Theme::primary);
-    drawIcon(painter, ToolIcon::Save, QPointF(1167, 60), Theme::text, 17);
-    centeredText(painter, QRectF(1178, 38, 42, 44), QStringLiteral("保存"), Theme::text,
-                 Theme::font(13, QFont::DemiBold));
-}
-
-void EditorCanvas::drawBottomEditor(QPainter &painter)
-{
-    const QRectF statusRect(150, 641, 980, 53);
-    roundedPanel(painter, statusRect, 14, Theme::surface, Theme::border, 1.0);
-
-    const int positiveCount = std::count_if(m_marks.cbegin(), m_marks.cend(), [](const SelectionMark &mark) {
-        return mark.positive;
+    m_toastTimer.setSingleShot(true);
+    connect(&m_toastTimer, &QTimer::timeout, this, [this] {
+        m_savedToastVisible = false;
+        m_toast->hide();
     });
-    QString status;
-    if (!m_transientMessage.isEmpty())
-        status = m_transientMessage;
-    else if (positiveCount == 0)
-        status = m_captureEnabled
-                     ? QStringLiteral("AI 捕捉已开启，点击图像中的微生物进行选择")
-                     : QStringLiteral("AI 捕捉已关闭，可使用手动工具创建选区");
-    else
-        status = QStringLiteral("已捕捉 %1 个微生物，可继续调整选区").arg(positiveCount);
 
-    drawIcon(painter, m_captureEnabled ? ToolIcon::Sparkles : ToolIcon::Eye,
-             QPointF(178, 667), m_captureEnabled ? QColor(68, 126, 255) : Theme::textMuted, 17);
-    centeredText(painter, QRectF(197, 647, 456, 40), status, Theme::textSecondary,
-                 Theme::font(13), Qt::AlignVCenter | Qt::AlignLeft);
-
-    const QRectF addRect(677, 646, 132, 41);
-    roundedPanel(painter, addRect, 10,
-                 m_addMode ? Theme::primary : Theme::surfaceSoft,
-                 m_addMode ? Theme::primary : Theme::border);
-    drawIcon(painter, ToolIcon::Plus, QPointF(705, 666.5), m_addMode ? Theme::text : Theme::textSecondary, 16);
-    centeredText(painter, QRectF(720, 646, 78, 41), QStringLiteral("增加选区"),
-                 m_addMode ? Theme::text : Theme::textSecondary, Theme::font(12, QFont::DemiBold));
-
-    const QRectF subtractRect(817, 646, 132, 41);
-    roundedPanel(painter, subtractRect, 10,
-                 !m_addMode ? QColor(235, 58, 67) : Theme::surfaceSoft,
-                 !m_addMode ? QColor(235, 58, 67) : Theme::border);
-    drawIcon(painter, ToolIcon::Minus, QPointF(845, 666.5), !m_addMode ? Theme::text : Theme::textMuted, 16);
-    centeredText(painter, QRectF(860, 646, 78, 41), QStringLiteral("减少选区"),
-                 !m_addMode ? Theme::text : Theme::textMuted, Theme::font(12, QFont::DemiBold));
-
-    const QRectF generateRect(957, 646, 164, 41);
-    const bool canGenerate = positiveCount > 0;
-    roundedPanel(painter, generateRect, 10,
-                 canGenerate ? Theme::primary : QColor(44, 55, 75),
-                 canGenerate ? Theme::primary : Theme::borderSoft);
-    centeredText(painter, generateRect, QStringLiteral("生成 3D 模型"),
-                 canGenerate ? Theme::text : Theme::textMuted, Theme::font(12, QFont::DemiBold));
-
-    const QRectF leftTools(150, 706, 166, 60);
-    roundedPanel(painter, leftTools, 15, Theme::surface, Theme::border);
-    drawToolButton(painter, QRectF(156, 714, 48, 44), ToolIcon::Image, QStringLiteral("导入显微图像"));
-    drawToolButton(painter, QRectF(208, 714, 48, 44), ToolIcon::Rotate, QStringLiteral("顺时针旋转图像"));
-    drawToolButton(painter, QRectF(260, 714, 48, 44), ToolIcon::Cube, QStringLiteral("导入 OBJ 或 PLY 模型"));
-
-    const QRectF centerTools(327, 706, 580, 60);
-    roundedPanel(painter, centerTools, 15, Theme::surface, Theme::border);
-    const ToolIcon centerIcons[] = {ToolIcon::Sparkles, ToolIcon::Cursor, ToolIcon::Lasso, ToolIcon::Brush,
-                                    ToolIcon::Eraser, ToolIcon::Grid, ToolIcon::Eye, ToolIcon::Rotate,
-                                    ToolIcon::Plus, ToolIcon::Trash, ToolIcon::Undo};
-    const QString centerTips[] = {QStringLiteral("智能选择"), QStringLiteral("点选"), QStringLiteral("套索"),
-                                  QStringLiteral("画笔"), QStringLiteral("擦除"), QStringLiteral("矩形选区"),
-                                  QStringLiteral("显示掩膜"), QStringLiteral("椭圆选区"), QStringLiteral("文字标记"),
-                                  QStringLiteral("清除全部"), QStringLiteral("撤销")};
-    for (int index = 0; index < 11; ++index)
-        drawToolButton(painter, QRectF(333 + index * 52, 714, 48, 44), centerIcons[index], centerTips[index],
-                       index == m_activeTool);
-
-    const QRectF aiTools(919, 706, 210, 60);
-    roundedPanel(painter, aiTools, 15, Theme::surface, Theme::border);
-    drawIcon(painter, ToolIcon::Sparkles, QPointF(946, 736), QColor(72, 129, 255), 18);
-    centeredText(painter, QRectF(968, 716, 94, 40), QStringLiteral("AI 捕捉微生物"), Theme::textSecondary,
-                 Theme::font(11, QFont::DemiBold), Qt::AlignVCenter | Qt::AlignLeft);
-    const QRectF toggle(1068, 724, 47, 26);
-    roundedPanel(painter, toggle, 13, m_captureEnabled ? Theme::primary : QColor(60, 73, 93));
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(Qt::white);
-    painter.drawEllipse(QPointF(m_captureEnabled ? 1102 : 1081, 737), 9, 9);
+    applyState(false);
 }
 
-void EditorCanvas::drawResultOverlay(QPainter &painter)
+EditorCanvas::~EditorCanvas() = default;
+
+void EditorCanvas::buildInterface()
 {
-    const QRectF download(862, 584, 96, 41);
-    drawButton(painter, download, QStringLiteral("下载3D"), false, ToolIcon::Download);
-    const QRectF fullscreen(966, 584, 92, 41);
-    drawButton(painter, fullscreen, QStringLiteral("全屏"), false, ToolIcon::Fullscreen);
+    setStyleSheet(QStringLiteral(R"STYLE(
+        QWidget#EditorRoot {
+            background: #070d19;
+            color: #f0f4fb;
+            font-family: "Microsoft YaHei UI", "Segoe UI";
+            font-size: 13px;
+        }
+        QFrame#TopBar, QFrame#StatusBar, QFrame#ToolPanel, QFrame#AiPanel {
+            background: #0e1524;
+            border: 1px solid #39465e;
+        }
+        QFrame#TopBar { border-radius: 20px; }
+        QFrame#StatusBar { border-radius: 14px; }
+        QFrame#ToolPanel, QFrame#AiPanel { border-radius: 15px; }
+        QLabel { color: #f0f4fb; background: transparent; border: none; }
+        QLabel#SecondaryLabel { color: #aab5c8; }
+        QLabel#MutedLabel { color: #77849c; }
+        QLabel#StatusIcon { color: #3f7cff; font-size: 20px; }
+        QLabel#TitleLabel { font-size: 15px; font-weight: 600; }
+
+        QPushButton {
+            min-height: 38px;
+            padding: 0 16px;
+            color: #dbe3f1;
+            background: #202a3c;
+            border: 1px solid #3b4861;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+        QPushButton:hover { background: #2a3650; border-color: #52617d; color: #ffffff; }
+        QPushButton:pressed { background: #182236; padding-top: 2px; padding-left: 17px; }
+        QPushButton:focus { border: 1px solid #7da5ff; }
+        QPushButton:disabled { background: #111827; border-color: #293348; color: #65718a; }
+        QPushButton#GhostButton { background: transparent; border: none; color: #d8e0ef; padding: 0 8px; }
+        QPushButton#GhostButton:hover { background: #1c2639; }
+        QPushButton#ExitButton { background: #252f43; border-color: #252f43; color: #d0d8e6; }
+        QPushButton#ExitButton:hover { background: #303b52; }
+        QPushButton#PrimaryButton { background: #235cf0; border-color: #2f6cff; color: #ffffff; font-weight: 600; }
+        QPushButton#PrimaryButton:hover { background: #3472ff; border-color: #6091ff; }
+        QPushButton#PrimaryButton:pressed { background: #1848c8; }
+        QPushButton#PrimaryButton:disabled { background: #10182b; border-color: #27324a; color: #687692; }
+        QPushButton#AddButton:checked { background: #235cf0; border-color: #3977ff; color: #ffffff; }
+        QPushButton#SubtractButton:checked { background: #eb3a43; border-color: #ff5159; color: #ffffff; }
+        QPushButton#FloatingButton { background: rgba(9, 17, 31, 235); border-color: #344159; color: #dce4f2; }
+        QPushButton#FloatingButton:hover { background: #1b2a40; border-color: #536582; }
+
+        QToolButton {
+            width: 42px;
+            height: 42px;
+            padding: 0;
+            background: #202a3c;
+            border: 1px solid #3a4860;
+            border-radius: 10px;
+        }
+        QToolButton:hover { background: #2b3851; border-color: #566784; }
+        QToolButton:pressed { background: #172238; padding-top: 2px; }
+        QToolButton:checked { background: #173764; border-color: #2f72ff; }
+        QToolButton:focus { border-color: #7da5ff; }
+
+        QWidget#ModalShade { background: rgba(4, 9, 18, 150); }
+        QFrame#ModalPage {
+            background: #0f1627;
+            border: 1px solid #46536b;
+            border-radius: 20px;
+        }
+        QFrame#CreditPanel {
+            background: #242d40;
+            border: 1px solid #46536b;
+            border-radius: 12px;
+        }
+        QLabel#ModalIconBlue, QLabel#ModalIconRed {
+            border-radius: 24px;
+            font-size: 26px;
+            font-weight: 600;
+        }
+        QLabel#ModalIconBlue { background: #2b65e8; color: #ffffff; }
+        QLabel#ModalIconRed { background: #252e42; border: 1px solid #46536b; color: #ff4a52; }
+        QLabel#ModalTitle { font-size: 21px; font-weight: 650; }
+        QLabel#ModalBody { color: #a3aec2; font-size: 13px; }
+        QProgressBar {
+            height: 8px;
+            background: #2a3346;
+            border: none;
+            border-radius: 4px;
+        }
+        QProgressBar::chunk { background: #3777ff; border-radius: 4px; }
+
+        QFrame#Toast {
+            background: #11192a;
+            border: 1px solid #45536d;
+            border-radius: 14px;
+        }
+        QLabel#ToastIcon {
+            background: #233047;
+            border: 1px solid #465775;
+            border-radius: 18px;
+            color: #49d29b;
+            font-size: 20px;
+            font-weight: 700;
+        }
+        QLabel#ToastTitle { font-size: 14px; font-weight: 600; }
+        QLabel#ToastDetail { color: #8794ab; font-size: 11px; }
+    )STYLE"));
+
+    m_contentLayer = new QWidget(this);
+    m_contentLayer->setObjectName(QStringLiteral("ContentLayer"));
+    m_contentLayer->setAttribute(Qt::WA_StyledBackground, true);
+
+    m_imageView = new ImageSelectionView(m_contentLayer);
+    m_imageView->setObjectName(QStringLiteral("ImageSelectionView"));
+    m_imageView->setSourceImage(m_sourceImage);
+    m_imageView->selectionChanged = [this] { updateSelectionState(); };
+
+    m_modelView = new ModelViewport(&m_model, m_contentLayer);
+    m_modelView->hide();
+
+    buildTopBar();
+    buildStatusBar();
+    buildToolBars();
+    buildModal();
+    buildToast();
+
+    auto *openShortcut = new QShortcut(QKeySequence::Open, this);
+    connect(openShortcut, &QShortcut::activated, this, [this] { openImage(); });
+    auto *modelShortcut = new QShortcut(QKeySequence(Qt::Key_M), this);
+    connect(modelShortcut, &QShortcut::activated, this, [this] { openModel(); });
+    auto *fullscreenShortcut = new QShortcut(QKeySequence(Qt::Key_F11), this);
+    connect(fullscreenShortcut, &QShortcut::activated, this, [this] { toggleFullscreen(); });
 }
 
-void EditorCanvas::drawModal(QPainter &painter)
+QPushButton *EditorCanvas::createTextButton(const QString &text,
+                                            const QString &objectName,
+                                            QWidget *parent,
+                                            const QIcon &icon)
 {
-    painter.fillRect(QRectF(0, 0, 1280, 800), QColor(2, 6, 14, 166));
-
-    if (m_state == UiState::CreditConfirm) {
-        const QRectF card(390, 257, 500, 286);
-        roundedPanel(painter, card, 20, Theme::surfaceRaised, Theme::border, 1.0);
-        centeredText(painter, QRectF(424, 281, 382, 34), QStringLiteral("确认生成3D模型"), Theme::text,
-                     Theme::font(19, QFont::DemiBold), Qt::AlignVCenter | Qt::AlignLeft);
-        drawIcon(painter, ToolIcon::Close, QPointF(854, 299), Theme::textMuted, 18);
-        painter.setPen(QPen(Theme::borderSoft, 1));
-        painter.drawLine(QPointF(414, 328), QPointF(866, 328));
-
-        centeredText(painter, QRectF(424, 348, 432, 28), QStringLiteral("本次转换将消耗"), Theme::textSecondary,
-                     Theme::font(13), Qt::AlignVCenter | Qt::AlignLeft);
-        centeredText(painter, QRectF(424, 378, 238, 45), QStringLiteral("15 积分"), Theme::text,
-                     Theme::font(27, QFont::Bold), Qt::AlignVCenter | Qt::AlignLeft);
-        roundedPanel(painter, QRectF(682, 374, 172, 50), 12, QColor(11, 18, 31), Theme::borderSoft);
-        centeredText(painter, QRectF(696, 378, 142, 19), QStringLiteral("当前积分"), Theme::textMuted,
-                     Theme::font(11), Qt::AlignVCenter | Qt::AlignLeft);
-        centeredText(painter, QRectF(696, 397, 142, 22), QStringLiteral("635"), Theme::text,
-                     Theme::font(16, QFont::DemiBold), Qt::AlignVCenter | Qt::AlignLeft);
-
-        drawButton(painter, QRectF(424, 467, 206, 48), QStringLiteral("取消"), false);
-        drawButton(painter, QRectF(642, 467, 214, 48), QStringLiteral("确认生成"), true, ToolIcon::Sparkles);
-    } else if (m_state == UiState::Generating) {
-        const QRectF card(390, 275, 500, 250);
-        roundedPanel(painter, card, 20, Theme::surfaceRaised, Theme::border, 1.0);
-        drawSpinner(painter, QPointF(640, 344), 26);
-        centeredText(painter, QRectF(430, 387, 420, 34), QStringLiteral("正在生成3D模型"), Theme::text,
-                     Theme::font(20, QFont::DemiBold));
-        centeredText(painter, QRectF(430, 428, 420, 28), QStringLiteral("正在重建表面与纹理，请稍候…"), Theme::textSecondary,
-                     Theme::font(13));
-        roundedPanel(painter, QRectF(482, 477, 316, 6), 3, QColor(42, 55, 76));
-        roundedPanel(painter, QRectF(482, 477, 86 + m_loadingPhase * 16, 6), 3, Theme::primary);
-    } else if (m_state == UiState::Failed) {
-        const QRectF card(390, 257, 500, 286);
-        roundedPanel(painter, card, 20, Theme::surfaceRaised, Theme::border, 1.0);
-        painter.setPen(QPen(QColor(255, 91, 106, 50), 10));
-        painter.setBrush(QColor(255, 75, 93, 26));
-        painter.drawEllipse(QPointF(640, 329), 34, 34);
-        drawIcon(painter, ToolIcon::Warning, QPointF(640, 329), Theme::danger, 28);
-        centeredText(painter, QRectF(424, 376, 432, 34), QStringLiteral("3D模型生成失败"), Theme::text,
-                     Theme::font(20, QFont::DemiBold));
-        centeredText(painter, QRectF(428, 416, 424, 44), QStringLiteral("模型数据未通过校验，积分未扣除。\n请调整选区后重试。"),
-                     Theme::textSecondary, Theme::font(12), Qt::AlignCenter);
-        drawButton(painter, QRectF(424, 477, 206, 48), QStringLiteral("返回编辑"), false);
-        drawButton(painter, QRectF(642, 477, 214, 48), QStringLiteral("重新生成"), true, ToolIcon::Sparkles);
-    }
+    auto *button = new QPushButton(icon, text, parent);
+    button->setObjectName(objectName);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::StrongFocus);
+    button->setIconSize(QSize(22, 22));
+    button->setAccessibleName(text);
+    return button;
 }
 
-void EditorCanvas::drawSavedToast(QPainter &painter)
+QToolButton *EditorCanvas::createToolButton(const QString &tooltip,
+                                            const QIcon &icon,
+                                            QWidget *parent,
+                                            bool checkable)
 {
-    const QRectF toast(460, 116, 360, 64);
-    roundedPanel(painter, toast, 14, QColor(17, 30, 43, 250), QColor(41, 133, 103));
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(20, 193, 127, 40));
-    painter.drawEllipse(QPointF(493, 148), 17, 17);
-    drawIcon(painter, ToolIcon::Check, QPointF(493, 148), Theme::success, 18);
-    centeredText(painter, QRectF(520, 124, 270, 24), QStringLiteral("模型保存成功"), Theme::text,
-                 Theme::font(14, QFont::DemiBold), Qt::AlignVCenter | Qt::AlignLeft);
-    centeredText(painter, QRectF(520, 147, 270, 21), QStringLiteral("PLY 文件已保存到所选位置"), Theme::textSecondary,
-                 Theme::font(11), Qt::AlignVCenter | Qt::AlignLeft);
+    auto *button = new QToolButton(parent);
+    button->setIcon(icon);
+    button->setIconSize(QSize(24, 24));
+    button->setToolTip(tooltip);
+    button->setAccessibleName(tooltip);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::StrongFocus);
+    button->setCheckable(checkable);
+    return button;
 }
 
-void EditorCanvas::drawToolButton(QPainter &painter,
-                                  const QRectF &rect,
-                                  ToolIcon icon,
-                                  const QString &tooltip,
-                                  bool active,
-                                  bool enabled)
+void EditorCanvas::buildTopBar()
 {
-    Q_UNUSED(tooltip)
-    const QPointF cursor = toDesign(mapFromGlobal(QCursor::pos()));
-    const bool hovered = rect.contains(cursor);
-    QColor fill = Qt::transparent;
-    QColor borderColor = Qt::transparent;
-    if (active) {
-        fill = QColor(42, 104, 255, 46);
-        borderColor = QColor(70, 126, 255, 150);
-    } else if (hovered) {
-        fill = QColor(255, 255, 255, 13);
-        borderColor = Theme::borderSoft;
-    }
-    if (fill.alpha() > 0)
-        roundedPanel(painter, rect, 9, fill, borderColor);
-    drawIcon(painter, icon, rect.center(),
-             enabled ? (active ? QColor(118, 158, 255) : Theme::textSecondary) : Theme::textMuted, 19);
+    m_topBar = new TitleBar(this);
+    m_topBar->setObjectName(QStringLiteral("TopBar"));
+    m_topBar->setAttribute(Qt::WA_StyledBackground, true);
+
+    m_backButton = createTextButton(QStringLiteral("返回"), QStringLiteral("GhostButton"),
+                                    m_topBar, makeIcon(IconKind::Back, Theme::secondary));
+    m_backButton->setToolTip(QStringLiteral("返回上一层"));
+    connect(m_backButton, &QPushButton::clicked, this, [this] {
+        if (isSplitState(m_state))
+            setState(m_imageView->selectionCount() > 0 ? UiState::Selected : UiState::Waiting);
+        else
+            close();
+    });
+
+    m_titleLabel = new QLabel(m_topBar);
+    m_titleLabel->setObjectName(QStringLiteral("TitleLabel"));
+    m_titleLabel->setTextInteractionFlags(Qt::NoTextInteraction);
+
+    m_exitButton = createTextButton(QStringLiteral("退出编辑模式"), QStringLiteral("ExitButton"), m_topBar);
+    connect(m_exitButton, &QPushButton::clicked, this, &QWidget::close);
+
+    m_saveButton = createTextButton(QStringLiteral("保存"), QStringLiteral("PrimaryButton"),
+                                    m_topBar, makeIcon(IconKind::Save));
+    m_saveButton->setShortcut(QKeySequence::Save);
+    m_saveButton->setToolTip(QStringLiteral("保存 3D 模型 (Ctrl+S)"));
+    connect(m_saveButton, &QPushButton::clicked, this, [this] {
+        if (m_state == UiState::Result)
+            saveModel();
+        else
+            showToast(QStringLiteral("请先生成 3D 模型"), QStringLiteral("完成选区后即可转换并保存"), false);
+    });
 }
 
-void EditorCanvas::drawButton(QPainter &painter,
-                              const QRectF &rect,
-                              const QString &text,
-                              bool primary,
-                              ToolIcon icon)
+void EditorCanvas::buildStatusBar()
 {
-    const QPointF cursor = toDesign(mapFromGlobal(QCursor::pos()));
-    const bool hovered = rect.contains(cursor);
-    roundedPanel(painter, rect, 10,
-                 primary ? (hovered ? Theme::primaryHover : Theme::primary)
-                         : (hovered ? QColor(39, 51, 73) : Theme::surfaceSoft),
-                 primary ? Theme::primary : Theme::border);
-    const bool hasIcon = icon != ToolIcon::Cursor;
-    if (hasIcon)
-        drawIcon(painter, icon, QPointF(rect.center().x() - 37, rect.center().y()), Theme::text, 17);
-    centeredText(painter, hasIcon ? rect.adjusted(24, 0, -4, 0) : rect, text,
-                 primary ? Theme::text : Theme::textSecondary, Theme::font(13, QFont::DemiBold));
-}
+    m_statusBar = new QFrame(this);
+    m_statusBar->setObjectName(QStringLiteral("StatusBar"));
+    m_statusBar->setAttribute(Qt::WA_StyledBackground, true);
 
-void EditorCanvas::drawSpinner(QPainter &painter, const QPointF &center, qreal radius)
-{
-    painter.save();
-    painter.setPen(Qt::NoPen);
-    for (int index = 0; index < 12; ++index) {
-        const qreal angle = qDegreesToRadians(qreal(index * 30));
-        const qreal opacity = 0.18 + 0.82 * qreal((index - m_loadingPhase + 12) % 12) / 11.0;
-        QColor color = Theme::primary;
-        color.setAlphaF(opacity);
-        painter.setBrush(color);
-        const QPointF point = center + QPointF(qCos(angle) * radius, qSin(angle) * radius);
-        painter.drawEllipse(point, 3.2, 3.2);
-    }
-    painter.restore();
-}
+    m_statusIcon = new QLabel(QStringLiteral("✦"), m_statusBar);
+    m_statusIcon->setObjectName(QStringLiteral("StatusIcon"));
+    m_statusIcon->setAlignment(Qt::AlignCenter);
 
-void EditorCanvas::drawIcon(QPainter &painter, ToolIcon icon, const QPointF &center, const QColor &color, qreal size)
-{
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(color, qMax(1.4, size / 11.0), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-    painter.setPen(pen);
-    painter.setBrush(Qt::NoBrush);
-    const qreal half = size * 0.5;
+    m_statusLabel = new QLabel(m_statusBar);
+    m_statusLabel->setObjectName(QStringLiteral("SecondaryLabel"));
 
-    switch (icon) {
-    case ToolIcon::ArrowLeft:
-        painter.drawLine(QPointF(center.x() + half * 0.55, center.y()), QPointF(center.x() - half * 0.55, center.y()));
-        painter.drawLine(QPointF(center.x() - half * 0.55, center.y()), QPointF(center.x() - half * 0.05, center.y() - half * 0.45));
-        painter.drawLine(QPointF(center.x() - half * 0.55, center.y()), QPointF(center.x() - half * 0.05, center.y() + half * 0.45));
-        break;
-    case ToolIcon::Close:
-        painter.drawLine(center + QPointF(-half * 0.48, -half * 0.48), center + QPointF(half * 0.48, half * 0.48));
-        painter.drawLine(center + QPointF(half * 0.48, -half * 0.48), center + QPointF(-half * 0.48, half * 0.48));
-        break;
-    case ToolIcon::Save:
-        painter.drawRoundedRect(QRectF(center.x() - half * 0.68, center.y() - half * 0.68, half * 1.36, half * 1.36), 2, 2);
-        painter.drawRect(QRectF(center.x() - half * 0.33, center.y() - half * 0.66, half * 0.55, half * 0.42));
-        painter.drawLine(QPointF(center.x() - half * 0.35, center.y() + half * 0.23), QPointF(center.x() + half * 0.35, center.y() + half * 0.23));
-        break;
-    case ToolIcon::Image:
-        painter.drawRoundedRect(QRectF(center.x() - half * 0.72, center.y() - half * 0.58, half * 1.44, half * 1.16), 2, 2);
-        painter.drawEllipse(center + QPointF(-half * 0.30, -half * 0.20), half * 0.12, half * 0.12);
-        painter.drawPolyline(QPolygonF() << center + QPointF(-half * 0.55, half * 0.35)
-                                         << center + QPointF(-half * 0.12, -half * 0.02)
-                                         << center + QPointF(half * 0.10, half * 0.18)
-                                         << center + QPointF(half * 0.36, -half * 0.12)
-                                         << center + QPointF(half * 0.58, half * 0.34));
-        break;
-    case ToolIcon::Rotate:
-        painter.drawArc(QRectF(center.x() - half * 0.62, center.y() - half * 0.62, half * 1.24, half * 1.24), 25 * 16, 285 * 16);
-        painter.drawLine(center + QPointF(half * 0.56, -half * 0.38), center + QPointF(half * 0.62, half * 0.05));
-        painter.drawLine(center + QPointF(half * 0.56, -half * 0.38), center + QPointF(half * 0.16, -half * 0.27));
-        break;
-    case ToolIcon::Cube: {
-        QPolygonF top;
-        top << center + QPointF(0, -half * 0.72) << center + QPointF(half * 0.62, -half * 0.35)
-            << center + QPointF(0, 0.02) << center + QPointF(-half * 0.62, -half * 0.35) << center + QPointF(0, -half * 0.72);
-        painter.drawPolyline(top);
-        painter.drawLine(center + QPointF(-half * 0.62, -half * 0.35), center + QPointF(-half * 0.62, half * 0.34));
-        painter.drawLine(center + QPointF(half * 0.62, -half * 0.35), center + QPointF(half * 0.62, half * 0.34));
-        painter.drawLine(center + QPointF(0, 0.02), center + QPointF(0, half * 0.73));
-        painter.drawPolyline(QPolygonF() << center + QPointF(-half * 0.62, half * 0.34) << center + QPointF(0, half * 0.73)
-                                         << center + QPointF(half * 0.62, half * 0.34));
-        break;
-    }
-    case ToolIcon::Cursor:
-        painter.drawPolyline(QPolygonF() << center + QPointF(-half * 0.52, -half * 0.66)
-                                         << center + QPointF(half * 0.46, half * 0.10)
-                                         << center + QPointF(half * 0.02, half * 0.14)
-                                         << center + QPointF(half * 0.28, half * 0.64)
-                                         << center + QPointF(0.0, half * 0.75)
-                                         << center + QPointF(-half * 0.22, half * 0.24)
-                                         << center + QPointF(-half * 0.52, -half * 0.66));
-        break;
-    case ToolIcon::Lasso:
-        painter.drawEllipse(QRectF(center.x() - half * 0.65, center.y() - half * 0.48, half * 1.30, half * 0.95));
-        painter.drawArc(QRectF(center.x() - half * 0.16, center.y() + half * 0.22, half * 0.62, half * 0.48), 185 * 16, 230 * 16);
-        break;
-    case ToolIcon::Brush:
-        painter.drawLine(center + QPointF(-half * 0.45, half * 0.55), center + QPointF(half * 0.48, -half * 0.48));
-        painter.drawLine(center + QPointF(half * 0.27, -half * 0.65), center + QPointF(half * 0.62, -half * 0.30));
-        painter.drawArc(QRectF(center.x() - half * 0.70, center.y() + half * 0.22, half * 0.72, half * 0.48), 180 * 16, 180 * 16);
-        break;
-    case ToolIcon::Eraser:
-        painter.drawRoundedRect(QRectF(center.x() - half * 0.55, center.y() - half * 0.38, half * 1.10, half * 0.76), 2, 2);
-        painter.drawLine(center + QPointF(0, -half * 0.38), center + QPointF(0, half * 0.38));
-        break;
-    case ToolIcon::Sparkles:
-        painter.drawLine(center + QPointF(0, -half * 0.72), center + QPointF(0, half * 0.72));
-        painter.drawLine(center + QPointF(-half * 0.72, 0), center + QPointF(half * 0.72, 0));
-        painter.drawLine(center + QPointF(-half * 0.40, -half * 0.40), center + QPointF(half * 0.40, half * 0.40));
-        painter.drawLine(center + QPointF(half * 0.40, -half * 0.40), center + QPointF(-half * 0.40, half * 0.40));
-        break;
-    case ToolIcon::Eye:
-        painter.drawPath(QPainterPath(center + QPointF(-half * 0.72, 0)));
-        painter.drawEllipse(center, half * 0.26, half * 0.26);
-        painter.drawArc(QRectF(center.x() - half * 0.75, center.y() - half * 0.50, half * 1.5, half), 0, 180 * 16);
-        painter.drawArc(QRectF(center.x() - half * 0.75, center.y(), half * 1.5, half), 180 * 16, 180 * 16);
-        break;
-    case ToolIcon::Grid:
-        painter.drawRect(QRectF(center.x() - half * 0.62, center.y() - half * 0.62, half * 1.24, half * 1.24));
-        painter.drawLine(QPointF(center.x(), center.y() - half * 0.62), QPointF(center.x(), center.y() + half * 0.62));
-        painter.drawLine(QPointF(center.x() - half * 0.62, center.y()), QPointF(center.x() + half * 0.62, center.y()));
-        break;
-    case ToolIcon::Plus:
-        painter.drawLine(QPointF(center.x() - half * 0.5, center.y()), QPointF(center.x() + half * 0.5, center.y()));
-        painter.drawLine(QPointF(center.x(), center.y() - half * 0.5), QPointF(center.x(), center.y() + half * 0.5));
-        break;
-    case ToolIcon::Minus:
-        painter.drawLine(QPointF(center.x() - half * 0.5, center.y()), QPointF(center.x() + half * 0.5, center.y()));
-        break;
-    case ToolIcon::Undo:
-        painter.drawArc(QRectF(center.x() - half * 0.55, center.y() - half * 0.48, half * 1.15, half * 1.10), -55 * 16, 250 * 16);
-        painter.drawLine(center + QPointF(-half * 0.50, -half * 0.10), center + QPointF(-half * 0.65, -half * 0.50));
-        painter.drawLine(center + QPointF(-half * 0.50, -half * 0.10), center + QPointF(-half * 0.12, -half * 0.30));
-        break;
-    case ToolIcon::Trash:
-        painter.drawRoundedRect(QRectF(center.x() - half * 0.43, center.y() - half * 0.42, half * 0.86, half * 1.03), 2, 2);
-        painter.drawLine(QPointF(center.x() - half * 0.58, center.y() - half * 0.55), QPointF(center.x() + half * 0.58, center.y() - half * 0.55));
-        painter.drawLine(QPointF(center.x() - half * 0.20, center.y() - half * 0.74), QPointF(center.x() + half * 0.20, center.y() - half * 0.74));
-        break;
-    case ToolIcon::Download:
-        painter.drawLine(QPointF(center.x(), center.y() - half * 0.68), QPointF(center.x(), center.y() + half * 0.20));
-        painter.drawLine(center + QPointF(-half * 0.34, -half * 0.08), center + QPointF(0, half * 0.27));
-        painter.drawLine(center + QPointF(half * 0.34, -half * 0.08), center + QPointF(0, half * 0.27));
-        painter.drawLine(QPointF(center.x() - half * 0.58, center.y() + half * 0.62), QPointF(center.x() + half * 0.58, center.y() + half * 0.62));
-        break;
-    case ToolIcon::Fullscreen:
-        painter.drawLine(center + QPointF(-half * 0.62, -half * 0.10), center + QPointF(-half * 0.62, -half * 0.62));
-        painter.drawLine(center + QPointF(-half * 0.62, -half * 0.62), center + QPointF(-half * 0.10, -half * 0.62));
-        painter.drawLine(center + QPointF(half * 0.62, -half * 0.10), center + QPointF(half * 0.62, -half * 0.62));
-        painter.drawLine(center + QPointF(half * 0.62, -half * 0.62), center + QPointF(half * 0.10, -half * 0.62));
-        painter.drawLine(center + QPointF(-half * 0.62, half * 0.10), center + QPointF(-half * 0.62, half * 0.62));
-        painter.drawLine(center + QPointF(-half * 0.62, half * 0.62), center + QPointF(-half * 0.10, half * 0.62));
-        painter.drawLine(center + QPointF(half * 0.62, half * 0.10), center + QPointF(half * 0.62, half * 0.62));
-        painter.drawLine(center + QPointF(half * 0.62, half * 0.62), center + QPointF(half * 0.10, half * 0.62));
-        break;
-    case ToolIcon::Home:
-        painter.drawPolyline(QPolygonF() << center + QPointF(-half * 0.62, -half * 0.02)
-                                         << center + QPointF(0, -half * 0.62)
-                                         << center + QPointF(half * 0.62, -half * 0.02));
-        painter.drawRect(QRectF(center.x() - half * 0.45, center.y() - half * 0.02, half * 0.9, half * 0.65));
-        break;
-    case ToolIcon::Check:
-        painter.drawPolyline(QPolygonF() << center + QPointF(-half * 0.56, 0)
-                                         << center + QPointF(-half * 0.12, half * 0.42)
-                                         << center + QPointF(half * 0.62, -half * 0.48));
-        break;
-    case ToolIcon::Warning:
-        painter.drawPolygon(QPolygonF() << center + QPointF(0, -half * 0.72)
-                                        << center + QPointF(half * 0.70, half * 0.60)
-                                        << center + QPointF(-half * 0.70, half * 0.60));
-        painter.drawLine(QPointF(center.x(), center.y() - half * 0.28), QPointF(center.x(), center.y() + half * 0.18));
-        painter.drawPoint(QPointF(center.x(), center.y() + half * 0.40));
-        break;
-    }
-    painter.restore();
-}
+    m_addButton = createTextButton(QStringLiteral("＋ 增加选区"), QStringLiteral("AddButton"), m_statusBar);
+    m_addButton->setCheckable(true);
+    m_addButton->setChecked(true);
+    connect(m_addButton, &QPushButton::clicked, this, [this] {
+        m_addMode = true;
+        m_addButton->setChecked(true);
+        m_subtractButton->setChecked(false);
+        m_imageView->setAddMode(true);
+    });
 
-void EditorCanvas::addSelection(const QPointF &position, bool positive)
-{
-    SelectionMark mark;
-    mark.center = position;
-    mark.positive = positive;
-    mark.radiusX = 72.0 + (m_marks.size() % 3) * 10.0;
-    mark.radiusY = 46.0 + (m_marks.size() % 2) * 12.0;
-    m_marks.append(mark);
-    m_state = UiState::Selected;
-    if (m_usingBundledSample)
+    m_subtractButton = createTextButton(QStringLiteral("－ 减少选区"), QStringLiteral("SubtractButton"), m_statusBar);
+    m_subtractButton->setCheckable(true);
+    connect(m_subtractButton, &QPushButton::clicked, this, [this] {
         m_addMode = false;
-    update();
+        m_addButton->setChecked(false);
+        m_subtractButton->setChecked(true);
+        m_imageView->setAddMode(false);
+    });
+
+    m_generateButton = createTextButton(QStringLiteral("生成 3D 模型"), QStringLiteral("PrimaryButton"), m_statusBar);
+    connect(m_generateButton, &QPushButton::clicked, this, [this] {
+        if (m_imageView->selectionCount() > 0)
+            setState(UiState::CreditConfirm);
+    });
+}
+
+void EditorCanvas::buildToolBars()
+{
+    m_leftTools = new QFrame(this);
+    m_leftTools->setObjectName(QStringLiteral("ToolPanel"));
+    m_leftTools->setAttribute(Qt::WA_StyledBackground, true);
+    auto *leftLayout = new QHBoxLayout(m_leftTools);
+    leftLayout->setContentsMargins(7, 7, 7, 7);
+    leftLayout->setSpacing(5);
+
+    const QVector<QPair<QString, IconKind>> leftDefinitions = {
+        {QStringLiteral("导入显微图像 (Ctrl+O)"), IconKind::Image},
+        {QStringLiteral("顺时针旋转图像"), IconKind::Rotate},
+        {QStringLiteral("导入 OBJ 或 PLY 模型 (M)"), IconKind::Cube}
+    };
+    for (const auto &definition : leftDefinitions) {
+        QToolButton *button = createToolButton(definition.first, makeIcon(definition.second), m_leftTools);
+        m_leftToolButtons.append(button);
+        leftLayout->addWidget(button);
+    }
+    connect(m_leftToolButtons.at(0), &QToolButton::clicked, this, [this] { openImage(); });
+    connect(m_leftToolButtons.at(1), &QToolButton::clicked, this, [this] { rotateImage(); });
+    connect(m_leftToolButtons.at(2), &QToolButton::clicked, this, [this] { openModel(); });
+
+    m_centerTools = new QFrame(this);
+    m_centerTools->setObjectName(QStringLiteral("ToolPanel"));
+    m_centerTools->setAttribute(Qt::WA_StyledBackground, true);
+    auto *centerLayout = new QHBoxLayout(m_centerTools);
+    centerLayout->setContentsMargins(7, 7, 7, 7);
+    centerLayout->setSpacing(5);
+
+    const QVector<QPair<QString, IconKind>> centerDefinitions = {
+        {QStringLiteral("智能捕捉"), IconKind::Target},
+        {QStringLiteral("选择工具"), IconKind::Cursor},
+        {QStringLiteral("线段工具"), IconKind::Line},
+        {QStringLiteral("圆形笔刷"), IconKind::Circle},
+        {QStringLiteral("自由套索"), IconKind::Lasso},
+        {QStringLiteral("折线工具"), IconKind::Angle},
+        {QStringLiteral("矩形选区"), IconKind::Rectangle},
+        {QStringLiteral("椭圆选区"), IconKind::Ellipse},
+        {QStringLiteral("文字标记"), IconKind::Text},
+        {QStringLiteral("清空选区"), IconKind::Trash},
+        {QStringLiteral("撤销上一步"), IconKind::Undo}
+    };
+
+    auto *toolGroup = new QButtonGroup(m_centerTools);
+    toolGroup->setExclusive(true);
+    for (int index = 0; index < centerDefinitions.size(); ++index) {
+        const bool isEditingTool = index < 9;
+        QToolButton *button = createToolButton(centerDefinitions.at(index).first,
+                                               makeIcon(centerDefinitions.at(index).second),
+                                               m_centerTools, isEditingTool);
+        m_centerToolButtons.append(button);
+        centerLayout->addWidget(button);
+        if (isEditingTool)
+            toolGroup->addButton(button, index);
+    }
+    m_centerToolButtons.first()->setChecked(true);
+    connect(m_centerToolButtons.at(9), &QToolButton::clicked, this, [this] {
+        m_imageView->clearSelections();
+    });
+    connect(m_centerToolButtons.at(10), &QToolButton::clicked, this, [this] {
+        m_imageView->removeLastSelection();
+    });
+
+    m_aiTools = new QFrame(this);
+    m_aiTools->setObjectName(QStringLiteral("AiPanel"));
+    m_aiTools->setAttribute(Qt::WA_StyledBackground, true);
+    m_aiLabel = new QLabel(QStringLiteral("✦  AI 捕捉微生物"), m_aiTools);
+    m_aiLabel->setObjectName(QStringLiteral("SecondaryLabel"));
+    m_aiSwitch = new ToggleSwitch(m_aiTools);
+    connect(m_aiSwitch, &QAbstractButton::toggled, this, [this](bool enabled) {
+        m_statusIcon->setText(enabled ? QStringLiteral("✦") : QStringLiteral("◌"));
+        updateSelectionState();
+    });
+
+    m_downloadButton = createTextButton(QStringLiteral("下载3D"), QStringLiteral("FloatingButton"),
+                                        this, makeIcon(IconKind::Download, Theme::secondary));
+    m_downloadButton->setToolTip(QStringLiteral("保存 PLY 模型"));
+    connect(m_downloadButton, &QPushButton::clicked, this, [this] { saveModel(); });
+
+    m_fullscreenButton = createTextButton(QStringLiteral("全屏"), QStringLiteral("FloatingButton"),
+                                          this, makeIcon(IconKind::Fullscreen, Theme::secondary));
+    m_fullscreenButton->setToolTip(QStringLiteral("切换全屏 (F11)"));
+    connect(m_fullscreenButton, &QPushButton::clicked, this, [this] { toggleFullscreen(); });
+}
+
+void EditorCanvas::buildModal()
+{
+    m_modalShade = new QWidget(this);
+    m_modalShade->setObjectName(QStringLiteral("ModalShade"));
+    m_modalShade->setAttribute(Qt::WA_StyledBackground, true);
+
+    m_modalStack = new QStackedWidget(m_modalShade);
+    m_modalStack->setObjectName(QStringLiteral("StateModal"));
+
+    auto makePage = [this]() {
+        auto *page = new QFrame(m_modalStack);
+        page->setObjectName(QStringLiteral("ModalPage"));
+        page->setAttribute(Qt::WA_StyledBackground, true);
+        return page;
+    };
+    auto makeLabel = [](const QString &text, const QString &name, QWidget *parent) {
+        auto *label = new QLabel(text, parent);
+        label->setObjectName(name);
+        return label;
+    };
+
+    QFrame *confirmPage = makePage();
+    QLabel *confirmIcon = makeLabel(QStringLiteral("◎"), QStringLiteral("ModalIconBlue"), confirmPage);
+    confirmIcon->setAlignment(Qt::AlignCenter);
+    confirmIcon->setGeometry(32, 27, 48, 48);
+    QLabel *confirmTitle = makeLabel(QStringLiteral("确认生成 3D 模型"), QStringLiteral("ModalTitle"), confirmPage);
+    confirmTitle->setGeometry(96, 24, 330, 32);
+    QLabel *confirmSubtitle = makeLabel(QStringLiteral("本次转换将消耗 15 积分"), QStringLiteral("ModalBody"), confirmPage);
+    confirmSubtitle->setGeometry(96, 57, 300, 24);
+
+    QFrame *creditPanel = new QFrame(confirmPage);
+    creditPanel->setObjectName(QStringLiteral("CreditPanel"));
+    creditPanel->setAttribute(Qt::WA_StyledBackground, true);
+    creditPanel->setGeometry(32, 103, 436, 48);
+    QLabel *creditCurrent = makeLabel(QStringLiteral("当前 635"), QStringLiteral("ModalBody"), creditPanel);
+    creditCurrent->setGeometry(20, 0, 105, 48);
+    QLabel *creditCost = makeLabel(QStringLiteral("本次 -15"), QStringLiteral("ModalBody"), creditPanel);
+    creditCost->setGeometry(158, 0, 105, 48);
+    QLabel *creditAfter = makeLabel(QStringLiteral("转换后 620"), QStringLiteral("ModalBody"), creditPanel);
+    creditAfter->setStyleSheet(QStringLiteral("color: #4f83ff;"));
+    creditAfter->setGeometry(296, 0, 120, 48);
+
+    QLabel *confirmNote = makeLabel(QStringLiteral("确认后将扣除积分并开始生成，取消不会扣除。"),
+                                    QStringLiteral("ModalBody"), confirmPage);
+    confirmNote->setGeometry(32, 163, 430, 28);
+    QPushButton *confirmCancel = createTextButton(QStringLiteral("取消"), QStringLiteral("ModalButton"), confirmPage);
+    confirmCancel->setGeometry(172, 215, 142, 48);
+    QPushButton *confirmAccept = createTextButton(QStringLiteral("确认转换"), QStringLiteral("PrimaryButton"), confirmPage);
+    confirmAccept->setGeometry(326, 215, 142, 48);
+    connect(confirmCancel, &QPushButton::clicked, this, [this] {
+        setState(m_imageView->selectionCount() > 0 ? UiState::Selected : UiState::Waiting);
+    });
+    connect(confirmAccept, &QPushButton::clicked, this, [this] {
+        m_demoStateLocked = false;
+        beginGeneration();
+    });
+
+    QFrame *generatingPage = makePage();
+    QLabel *generatingIcon = makeLabel(QStringLiteral("◔"), QStringLiteral("ModalIconBlue"), generatingPage);
+    generatingIcon->setAlignment(Qt::AlignCenter);
+    generatingIcon->setGeometry(226, 28, 48, 48);
+    QLabel *generatingTitle = makeLabel(QStringLiteral("正在生成 3D 模型"), QStringLiteral("ModalTitle"), generatingPage);
+    generatingTitle->setAlignment(Qt::AlignCenter);
+    generatingTitle->setGeometry(80, 94, 340, 34);
+    QLabel *generatingBody = makeLabel(QStringLiteral("正在重建微生物的细节与深度信息"), QStringLiteral("ModalBody"), generatingPage);
+    generatingBody->setAlignment(Qt::AlignCenter);
+    generatingBody->setGeometry(70, 135, 360, 26);
+    m_generationProgress = new QProgressBar(generatingPage);
+    m_generationProgress->setTextVisible(false);
+    m_generationProgress->setRange(0, 0);
+    m_generationProgress->setGeometry(88, 181, 324, 8);
+    QLabel *generatingNote = makeLabel(QStringLiteral("正在生成，请勿关闭页面"), QStringLiteral("ModalBody"), generatingPage);
+    generatingNote->setAlignment(Qt::AlignCenter);
+    generatingNote->setGeometry(100, 205, 300, 26);
+
+    QFrame *failedPage = makePage();
+    QLabel *failedIcon = makeLabel(QStringLiteral("!"), QStringLiteral("ModalIconRed"), failedPage);
+    failedIcon->setAlignment(Qt::AlignCenter);
+    failedIcon->setGeometry(226, 28, 48, 48);
+    QLabel *failedTitle = makeLabel(QStringLiteral("3D 模型生成失败"), QStringLiteral("ModalTitle"), failedPage);
+    failedTitle->setAlignment(Qt::AlignCenter);
+    failedTitle->setGeometry(75, 94, 350, 34);
+    QLabel *failedBody = makeLabel(QStringLiteral("生成过程未能完成，请检查网络后重新尝试"), QStringLiteral("ModalBody"), failedPage);
+    failedBody->setAlignment(Qt::AlignCenter);
+    failedBody->setGeometry(60, 136, 380, 28);
+    QPushButton *failedBack = createTextButton(QStringLiteral("返回编辑"), QStringLiteral("ModalButton"), failedPage);
+    failedBack->setGeometry(124, 186, 120, 44);
+    QPushButton *failedRetry = createTextButton(QStringLiteral("重新生成"), QStringLiteral("PrimaryButton"), failedPage);
+    failedRetry->setGeometry(256, 186, 120, 44);
+    connect(failedBack, &QPushButton::clicked, this, [this] {
+        setState(m_imageView->selectionCount() > 0 ? UiState::Selected : UiState::Waiting);
+    });
+    connect(failedRetry, &QPushButton::clicked, this, [this] {
+        m_demoStateLocked = false;
+        beginGeneration();
+    });
+
+    m_modalStack->addWidget(confirmPage);
+    m_modalStack->addWidget(generatingPage);
+    m_modalStack->addWidget(failedPage);
+
+    m_modalOpacity = new QGraphicsOpacityEffect(m_modalStack);
+    m_modalOpacity->setOpacity(1.0);
+    m_modalStack->setGraphicsEffect(m_modalOpacity);
+    m_modalAnimation = new QPropertyAnimation(m_modalOpacity, "opacity", this);
+    m_modalAnimation->setDuration(170);
+    m_modalAnimation->setEasingCurve(QEasingCurve::OutCubic);
+    m_modalShade->hide();
+}
+
+void EditorCanvas::buildToast()
+{
+    m_toast = new QFrame(this);
+    m_toast->setObjectName(QStringLiteral("Toast"));
+    m_toast->setAttribute(Qt::WA_StyledBackground, true);
+
+    QLabel *toastIcon = new QLabel(QStringLiteral("✓"), m_toast);
+    toastIcon->setObjectName(QStringLiteral("ToastIcon"));
+    toastIcon->setAlignment(Qt::AlignCenter);
+    toastIcon->setGeometry(16, 14, 36, 36);
+
+    m_toastTitle = new QLabel(QStringLiteral("已保存为模型"), m_toast);
+    m_toastTitle->setObjectName(QStringLiteral("ToastTitle"));
+    m_toastDetail = new QLabel(m_toast);
+    m_toastDetail->setObjectName(QStringLiteral("ToastDetail"));
+    m_toastAction = createTextButton(QStringLiteral("点击查看"), QStringLiteral("PrimaryButton"), m_toast);
+    m_toastAction->setGeometry(260, 12, 88, 40);
+    connect(m_toastAction, &QPushButton::clicked, this, [this] {
+        m_savedToastVisible = false;
+        m_toast->hide();
+        if (m_modelView->isVisible())
+            m_modelView->setFocus(Qt::OtherFocusReason);
+    });
+    m_toast->hide();
+}
+
+void EditorCanvas::layoutInterface()
+{
+    const int canvasWidth = width();
+    const int canvasHeight = height();
+    const bool split = isSplitState(m_state);
+    const int half = canvasWidth / 2;
+
+    m_contentLayer->setGeometry(rect());
+    m_imageView->setSplit(split);
+    m_imageView->setGeometry(0, 0, split ? half : canvasWidth, canvasHeight);
+    m_modelView->setGeometry(half, 0, canvasWidth - half, canvasHeight);
+    m_modelView->setVisible(split);
+
+    m_topBar->setGeometry(40, 28, canvasWidth - 80, 64);
+    m_backButton->setGeometry(12, 10, 102, 44);
+    m_titleLabel->setGeometry(130, 8, 400, 48);
+    m_exitButton->setGeometry(m_topBar->width() / 2 - 72, 10, 144, 42);
+    m_saveButton->setGeometry(m_topBar->width() - 94, 10, 82, 44);
+
+    const int editorLeft = (canvasWidth - 980) / 2;
+    const int statusTop = canvasHeight - 159;
+    const int toolsTop = canvasHeight - 94;
+    m_statusBar->setGeometry(editorLeft, statusTop, 980, 53);
+    m_statusIcon->setGeometry(12, 7, 32, 39);
+    m_statusLabel->setGeometry(46, 7, 470, 39);
+    m_addButton->setGeometry(527, 6, 132, 41);
+    m_subtractButton->setGeometry(667, 6, 132, 41);
+    m_generateButton->setGeometry(807, 6, 164, 41);
+
+    m_leftTools->setGeometry(editorLeft, toolsTop, 166, 60);
+    m_centerTools->setGeometry(editorLeft + 177, toolsTop, 580, 60);
+    m_aiTools->setGeometry(editorLeft + 769, toolsTop, 210, 60);
+    m_aiLabel->setGeometry(14, 8, 140, 44);
+    m_aiSwitch->move(153, 17);
+
+    m_downloadButton->setGeometry(half + 222, canvasHeight - 216, 96, 41);
+    m_fullscreenButton->setGeometry(half + 326, canvasHeight - 216, 92, 41);
+
+    m_modalShade->setGeometry(rect());
+    m_modalStack->setGeometry((canvasWidth - 500) / 2, (canvasHeight - 286) / 2, 500, 286);
+
+    m_toast->setGeometry((canvasWidth - 360) / 2, 116, 360, 64);
+    const bool hasDetail = !m_toastDetail->text().isEmpty();
+    m_toastTitle->setGeometry(64, hasDetail ? 10 : 0, 188, hasDetail ? 24 : 64);
+    m_toastDetail->setGeometry(64, 32, 188, 20);
+
+    m_contentLayer->lower();
+    m_imageView->lower();
+    if (split)
+        m_modelView->raise();
+    m_topBar->raise();
+    m_statusBar->raise();
+    m_leftTools->raise();
+    m_centerTools->raise();
+    m_aiTools->raise();
+    m_downloadButton->raise();
+    m_fullscreenButton->raise();
+    if (m_toast->isVisible())
+        m_toast->raise();
+    if (m_modalShade->isVisible())
+        m_modalShade->raise();
+}
+
+void EditorCanvas::applyState(bool animateModal)
+{
+    const bool split = isSplitState(m_state);
+    m_titleLabel->setText(split
+                              ? QStringLiteral("编辑: %1  ·  3D 预览").arg(m_imageName)
+                              : QStringLiteral("编辑: %1").arg(m_imageName));
+
+    const int count = m_imageView->positiveCount();
+    if (count == 0) {
+        m_statusLabel->setText(m_aiSwitch->isChecked()
+                                   ? QStringLiteral("请点击画面中的微生物进行捕捉")
+                                   : QStringLiteral("AI 捕捉已关闭，可使用手动工具创建选区"));
+    } else {
+        m_statusLabel->setText(QStringLiteral("已识别选区，可继续增加或减少选区"));
+    }
+
+    m_generateButton->setEnabled(count > 0 && m_state != UiState::Generating);
+    m_addButton->setChecked(m_addMode);
+    m_subtractButton->setChecked(!m_addMode);
+    m_imageView->setAddMode(m_addMode);
+
+    m_downloadButton->setVisible(split);
+    m_fullscreenButton->setVisible(split);
+
+    const bool modalVisible = m_state == UiState::CreditConfirm
+                              || m_state == UiState::Generating
+                              || m_state == UiState::Failed;
+    if (modalVisible) {
+        if (m_state == UiState::CreditConfirm)
+            m_modalStack->setCurrentIndex(0);
+        else if (m_state == UiState::Generating)
+            m_modalStack->setCurrentIndex(1);
+        else
+            m_modalStack->setCurrentIndex(2);
+
+        m_modalShade->show();
+        if (animateModal) {
+            m_modalAnimation->stop();
+            m_modalAnimation->setStartValue(0.0);
+            m_modalAnimation->setEndValue(1.0);
+            m_modalAnimation->start();
+        } else {
+            m_modalOpacity->setOpacity(1.0);
+        }
+    } else {
+        m_modalAnimation->stop();
+        m_modalShade->hide();
+    }
+
+    m_toast->setVisible(m_savedToastVisible);
+    layoutInterface();
+    m_modelView->update();
+}
+
+void EditorCanvas::setState(UiState state, bool animateModal)
+{
+    if (m_state == UiState::Generating && state != UiState::Generating)
+        m_generationTimer.stop();
+    m_state = state;
+    applyState(animateModal);
+}
+
+void EditorCanvas::updateSelectionState()
+{
+    if (m_state == UiState::Waiting || m_state == UiState::Selected)
+        m_state = m_imageView->selectionCount() > 0 ? UiState::Selected : UiState::Waiting;
+    applyState(false);
 }
 
 void EditorCanvas::openImage()
 {
     const QString initial = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
     const QString fileName = QFileDialog::getOpenFileName(this, QStringLiteral("导入显微图像"), initial,
-                                                           QStringLiteral("图像 (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
+                                                          QStringLiteral("图像 (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
     if (fileName.isEmpty())
         return;
+
     QImage image(fileName);
     if (image.isNull()) {
-        showTransientMessage(QStringLiteral("无法读取所选图像"));
+        showToast(QStringLiteral("无法读取所选图像"), QStringLiteral("请选择有效的 PNG、JPG、BMP 或 TIFF 文件"), false);
         return;
     }
+
     m_sourceImage = image;
-    m_usingBundledSample = false;
+    m_imageView->setSourceImage(m_sourceImage);
+    m_imageView->clearSelections(false);
     m_imageName = QFileInfo(fileName).completeBaseName();
-    m_marks.clear();
-    m_state = UiState::Waiting;
-    showTransientMessage(QStringLiteral("图像已导入"));
-    update();
+    setState(UiState::Waiting, false);
+    showToast(QStringLiteral("图像已导入"), m_imageName, false);
 }
 
 void EditorCanvas::rotateImage()
@@ -853,60 +1361,61 @@ void EditorCanvas::rotateImage()
     QTransform transform;
     transform.rotate(90.0);
     m_sourceImage = m_sourceImage.transformed(transform, Qt::SmoothTransformation);
-    update();
+    m_imageView->setSourceImage(m_sourceImage);
+    showToast(QStringLiteral("图像已旋转"), QStringLiteral("顺时针旋转 90°"), false);
 }
 
 void EditorCanvas::openModel()
 {
     const QString initial = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    const QString fileName = QFileDialog::getOpenFileName(this, QStringLiteral("导入3D模型"), initial,
-                                                           QStringLiteral("3D 模型 (*.ply *.obj)"));
+    const QString fileName = QFileDialog::getOpenFileName(this, QStringLiteral("导入 3D 模型"), initial,
+                                                          QStringLiteral("3D 模型 (*.ply *.obj)"));
     if (fileName.isEmpty())
         return;
+
     QString error;
     if (!m_model.load(fileName, &error)) {
-        m_state = UiState::Failed;
-        showTransientMessage(error);
-        update();
+        setState(UiState::Failed);
+        showToast(QStringLiteral("模型导入失败"), error, false);
         return;
     }
+
     m_modelName = QFileInfo(fileName).completeBaseName();
-    resetModelView();
-    m_state = UiState::Result;
-    update();
+    m_modelView->resetView();
+    setState(UiState::Result, false);
+    showToast(QStringLiteral("3D 模型已导入"), m_modelName, false);
 }
 
 void EditorCanvas::saveModel()
 {
     if (m_model.isEmpty()) {
-        showTransientMessage(QStringLiteral("没有可保存的3D模型"));
+        showToast(QStringLiteral("没有可保存的 3D 模型"), QString(), false);
         return;
     }
+
     const QString initial = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
                             + QStringLiteral("/sam-3d-model.ply");
-    const QString fileName = QFileDialog::getSaveFileName(this, QStringLiteral("保存3D模型"), initial,
-                                                           QStringLiteral("PLY 模型 (*.ply)"));
+    const QString fileName = QFileDialog::getSaveFileName(this, QStringLiteral("保存 3D 模型"), initial,
+                                                          QStringLiteral("PLY 模型 (*.ply)"));
     if (fileName.isEmpty())
         return;
+
     QString output = fileName;
     if (!output.endsWith(QStringLiteral(".ply"), Qt::CaseInsensitive))
         output += QStringLiteral(".ply");
+
     QString error;
     if (!m_model.savePly(output, &error)) {
-        showTransientMessage(error);
+        showToast(QStringLiteral("模型保存失败"), error, false);
         return;
     }
-    m_savedToastVisible = true;
-    m_toastTimer.start(3200);
-    update();
+    showToast(QStringLiteral("已保存为模型"), QFileInfo(output).fileName(), true);
 }
 
 void EditorCanvas::beginGeneration()
 {
-    m_state = UiState::Generating;
-    m_loadingPhase = 0;
+    setState(UiState::Generating);
     m_generationTimer.start(1550);
-    update();
 }
 
 void EditorCanvas::completeGeneration()
@@ -916,241 +1425,31 @@ void EditorCanvas::completeGeneration()
     if (m_model.isEmpty())
         m_model.createOrganicSample();
     m_modelName = QStringLiteral("叶片表皮 · 微生物重建");
-    resetModelView();
-    m_state = UiState::Result;
-    update();
-}
-
-void EditorCanvas::resetModelView()
-{
-    m_rotationX = -14.0f;
-    m_rotationY = 26.0f;
-    m_zoom = 0.82f;
-    m_pan = QPointF();
-    update();
+    m_modelView->resetView();
+    setState(UiState::Result);
 }
 
 void EditorCanvas::toggleFullscreen()
 {
-    if (isFullScreen())
-        showNormal();
-    else
-        showFullScreen();
-    update();
+    isFullScreen() ? showNormal() : showFullScreen();
 }
 
-void EditorCanvas::showTransientMessage(const QString &message)
+void EditorCanvas::showToast(const QString &title, const QString &detail, bool showAction)
 {
-    m_transientMessage = message;
-    m_messageTimer.start(2600);
-    update();
+    m_savedToastVisible = true;
+    m_toastTitle->setText(title);
+    m_toastDetail->setText(detail);
+    m_toastAction->setVisible(showAction);
+    m_toast->show();
+    layoutInterface();
+    m_toast->raise();
+    m_toastTimer.start(3200);
 }
 
-void EditorCanvas::handleClick(const QPointF &position)
+void EditorCanvas::resizeEvent(QResizeEvent *event)
 {
-    if (m_state == UiState::CreditConfirm) {
-        if (QRectF(562, 472, 142, 48).contains(position)) {
-            m_state = UiState::Selected;
-            update();
-        } else if (QRectF(716, 472, 142, 48).contains(position)) {
-            m_demoStateLocked = false;
-            beginGeneration();
-        }
-        return;
-    }
-    if (m_state == UiState::Generating)
-        return;
-    if (m_state == UiState::Failed) {
-        if (QRectF(514, 459, 120, 44).contains(position)) {
-            m_state = m_marks.isEmpty() ? UiState::Waiting : UiState::Selected;
-            update();
-        } else if (QRectF(646, 459, 120, 44).contains(position)) {
-            m_demoStateLocked = false;
-            beginGeneration();
-        }
-        return;
-    }
-
-    if (QRectF(52, 38, 92, 44).contains(position)) {
-        if (isResultState())
-            m_state = m_marks.isEmpty() ? UiState::Waiting : UiState::Selected;
-        else
-            close();
-        update();
-        return;
-    }
-    if (QRectF(638, 39, 144, 42).contains(position)) {
-        close();
-        return;
-    }
-    if (QRectF(1146, 38, 82, 44).contains(position)) {
-        if (isResultState())
-            saveModel();
-        else
-            showTransientMessage(QStringLiteral("请先生成3D模型"));
-        return;
-    }
-
-    if (isResultState()) {
-        if (QRectF(862, 584, 96, 41).contains(position))
-            saveModel();
-        else if (QRectF(966, 584, 92, 41).contains(position))
-            toggleFullscreen();
-        return;
-    }
-
-    if (QRectF(156, 714, 48, 44).contains(position)) {
-        openImage();
-        return;
-    }
-    if (QRectF(208, 714, 48, 44).contains(position)) {
-        rotateImage();
-        return;
-    }
-    if (QRectF(260, 714, 48, 44).contains(position)) {
-        openModel();
-        return;
-    }
-    if (QRectF(1068, 724, 47, 26).contains(position)) {
-        m_captureEnabled = !m_captureEnabled;
-        update();
-        return;
-    }
-    if (QRectF(677, 646, 132, 41).contains(position)) {
-        m_addMode = true;
-        update();
-        return;
-    }
-    if (QRectF(817, 646, 132, 41).contains(position)) {
-        m_addMode = false;
-        update();
-        return;
-    }
-    if (QRectF(957, 646, 164, 41).contains(position)) {
-        if (!m_marks.isEmpty()) {
-            m_state = UiState::CreditConfirm;
-            update();
-        }
-        return;
-    }
-    for (int index = 0; index < 11; ++index) {
-        if (!QRectF(333 + index * 52, 714, 48, 44).contains(position))
-            continue;
-        if (index == 10 && !m_marks.isEmpty()) {
-            m_marks.removeLast();
-            m_state = m_marks.isEmpty() ? UiState::Waiting : UiState::Selected;
-        } else if (index == 9) {
-            m_marks.clear();
-            m_state = UiState::Waiting;
-        } else {
-            m_activeTool = index;
-        }
-        update();
-        return;
-    }
-
-    if (position.y() > 108 && position.y() < 626)
-        addSelection(position, m_addMode);
-}
-
-QString EditorCanvas::tooltipAt(const QPointF &position) const
-{
-    if (QRectF(156, 714, 48, 44).contains(position)) return QStringLiteral("导入显微图像 (O)");
-    if (QRectF(208, 714, 48, 44).contains(position)) return QStringLiteral("顺时针旋转图像");
-    if (QRectF(260, 714, 48, 44).contains(position)) return QStringLiteral("导入 OBJ 或 PLY 模型 (M)");
-    if (QRectF(862, 584, 96, 41).contains(position)) return QStringLiteral("保存 PLY 模型 (Ctrl+S)");
-    if (QRectF(966, 584, 92, 41).contains(position)) return QStringLiteral("切换全屏 (F11)");
-    if (QRectF(677, 646, 132, 41).contains(position)) return QStringLiteral("增加选区");
-    if (QRectF(817, 646, 132, 41).contains(position)) return QStringLiteral("减少选区");
-    return QString();
-}
-
-void EditorCanvas::mousePressEvent(QMouseEvent *event)
-{
-    setFocus(Qt::MouseFocusReason);
-    m_lastMouse = event->localPos();
-    m_pressDesign = toDesign(event->localPos());
-    m_mouseMoved = false;
-
-    if (event->button() == Qt::LeftButton && QRectF(160, 28, 460, 64).contains(m_pressDesign)) {
-        m_draggingWindow = true;
-        m_windowDragOffset = event->globalPos() - frameGeometry().topLeft();
-        event->accept();
-        return;
-    }
-
-    if (isResultState() && m_pressDesign.x() >= 640 && m_pressDesign.y() > 98 && m_pressDesign.y() < 636) {
-        if (event->button() == Qt::LeftButton)
-            m_rotatingModel = true;
-        else if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton)
-            m_panningModel = true;
-    }
-    event->accept();
-}
-
-void EditorCanvas::mouseMoveEvent(QMouseEvent *event)
-{
-    const QPointF delta = event->localPos() - m_lastMouse;
-    if (QLineF(event->localPos(), QPointF(m_pressDesign.x() * width() / kDesignWidth,
-                                          m_pressDesign.y() * height() / kDesignHeight)).length() > 3.0)
-        m_mouseMoved = true;
-
-    if (m_draggingWindow) {
-        if (!isMaximized() && !isFullScreen())
-            move(event->globalPos() - m_windowDragOffset);
-    } else if (m_rotatingModel) {
-        m_rotationY += float(delta.x() * 0.55);
-        m_rotationX += float(delta.y() * 0.55);
-        m_rotationX = qBound(-89.0f, m_rotationX, 89.0f);
-        update();
-    } else if (m_panningModel) {
-        m_pan += delta * (kDesignWidth / qMax(1, width()));
-        update();
-    } else {
-        const QString tooltip = tooltipAt(toDesign(event->localPos()));
-        if (!tooltip.isEmpty())
-            QToolTip::showText(event->globalPos(), tooltip, this);
-        else
-            QToolTip::hideText();
-        update();
-    }
-    m_lastMouse = event->localPos();
-    event->accept();
-}
-
-void EditorCanvas::mouseReleaseEvent(QMouseEvent *event)
-{
-    const bool clicked = !m_mouseMoved;
-    m_rotatingModel = false;
-    m_panningModel = false;
-    m_draggingWindow = false;
-    if (clicked && event->button() == Qt::LeftButton)
-        handleClick(toDesign(event->localPos()));
-    event->accept();
-}
-
-void EditorCanvas::mouseDoubleClickEvent(QMouseEvent *event)
-{
-    const QPointF position = toDesign(event->localPos());
-    if (isResultState() && position.x() >= 640) {
-        resetModelView();
-    } else if (QRectF(160, 28, 460, 64).contains(position)) {
-        isMaximized() ? showNormal() : showMaximized();
-    }
-    event->accept();
-}
-
-void EditorCanvas::wheelEvent(QWheelEvent *event)
-{
-    const QPointF position = toDesign(event->posF());
-    if (isResultState() && position.x() >= 640) {
-        const float factor = event->angleDelta().y() > 0 ? 1.11f : 0.90f;
-        m_zoom = qBound(0.35f, m_zoom * factor, 4.5f);
-        update();
-        event->accept();
-        return;
-    }
-    QOpenGLWidget::wheelEvent(event);
+    QWidget::resizeEvent(event);
+    layoutInterface();
 }
 
 void EditorCanvas::keyPressEvent(QKeyEvent *event)
@@ -1158,64 +1457,35 @@ void EditorCanvas::keyPressEvent(QKeyEvent *event)
     if (event->key() == Qt::Key_Escape) {
         if (isFullScreen())
             showNormal();
-        else if (m_state == UiState::CreditConfirm || m_state == UiState::Failed)
-            m_state = m_marks.isEmpty() ? UiState::Waiting : UiState::Selected;
-        else if (m_state == UiState::Result)
-            m_state = m_marks.isEmpty() ? UiState::Waiting : UiState::Selected;
-        update();
+        else if (isSplitState(m_state))
+            setState(m_imageView->selectionCount() > 0 ? UiState::Selected : UiState::Waiting);
+        else
+            close();
+        event->accept();
         return;
     }
-    if (event->matches(QKeySequence::Open) || event->key() == Qt::Key_O) {
-        openImage();
+    if (event->key() == Qt::Key_Left) m_modelView->rotateBy(0.0f, -5.0f);
+    else if (event->key() == Qt::Key_Right) m_modelView->rotateBy(0.0f, 5.0f);
+    else if (event->key() == Qt::Key_Up) m_modelView->rotateBy(-5.0f, 0.0f);
+    else if (event->key() == Qt::Key_Down) m_modelView->rotateBy(5.0f, 0.0f);
+    else if (event->key() == Qt::Key_Plus || event->key() == Qt::Key_Equal) m_modelView->zoomBy(1.1f);
+    else if (event->key() == Qt::Key_Minus) m_modelView->zoomBy(0.9f);
+    else {
+        QWidget::keyPressEvent(event);
         return;
     }
-    if (event->key() == Qt::Key_M) {
-        openModel();
-        return;
-    }
-    if (event->matches(QKeySequence::Save)) {
-        saveModel();
-        return;
-    }
-    if (event->key() == Qt::Key_F11) {
-        toggleFullscreen();
-        return;
-    }
-    if (isResultState()) {
-        if (event->key() == Qt::Key_Left) m_rotationY -= 5.0f;
-        else if (event->key() == Qt::Key_Right) m_rotationY += 5.0f;
-        else if (event->key() == Qt::Key_Up) m_rotationX -= 5.0f;
-        else if (event->key() == Qt::Key_Down) m_rotationX += 5.0f;
-        else if (event->key() == Qt::Key_Plus || event->key() == Qt::Key_Equal) m_zoom = qMin(4.5f, m_zoom * 1.1f);
-        else if (event->key() == Qt::Key_Minus) m_zoom = qMax(0.35f, m_zoom * 0.9f);
-        else {
-            QOpenGLWidget::keyPressEvent(event);
-            return;
-        }
-        update();
-        return;
-    }
-    QOpenGLWidget::keyPressEvent(event);
-}
-
-void EditorCanvas::leaveEvent(QEvent *event)
-{
-    QToolTip::hideText();
-    QOpenGLWidget::leaveEvent(event);
+    event->accept();
 }
 
 void EditorCanvas::setDemoState(const QString &stateName)
 {
     const QString name = stateName.trimmed().toLower();
+    m_generationTimer.stop();
+    m_toastTimer.stop();
     m_demoStateLocked = true;
-    m_marks.clear();
     m_savedToastVisible = false;
-
-    if (name != QStringLiteral("waiting")) {
-        addSelection(QPointF(478, 344), true);
-        addSelection(QPointF(765, 426), true);
-        addSelection(QPointF(927, 289), true);
-    }
+    m_addMode = true;
+    m_imageView->setDemoSelections(name != QStringLiteral("waiting"));
 
     if (name == QStringLiteral("confirm"))
         m_state = UiState::CreditConfirm;
@@ -1225,16 +1495,18 @@ void EditorCanvas::setDemoState(const QString &stateName)
         m_state = UiState::Failed;
     else if (name == QStringLiteral("result") || name == QStringLiteral("saved")) {
         m_state = UiState::Result;
-        if (m_model.isEmpty())
-            m_model.createOrganicSample();
         m_modelName = QStringLiteral("叶片表皮 · 微生物重建");
-        if (name == QStringLiteral("saved"))
+        if (name == QStringLiteral("saved")) {
             m_savedToastVisible = true;
+            m_toastTitle->setText(QStringLiteral("已保存为模型"));
+            m_toastDetail->clear();
+            m_toastAction->show();
+        }
     } else if (name == QStringLiteral("selected")) {
         m_state = UiState::Selected;
     } else {
-        m_marks.clear();
         m_state = UiState::Waiting;
+        m_imageView->setDemoSelections(false);
     }
-    update();
+    applyState(false);
 }

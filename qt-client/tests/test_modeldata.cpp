@@ -3,6 +3,8 @@
 
 #include <QDataStream>
 #include <QFile>
+#include <QPushButton>
+#include <QStackedWidget>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -15,6 +17,7 @@ private slots:
     void asciiPlyRoundTrip();
     void binaryLittleEndianPlyLoads();
     void objLoadsAndTriangulates();
+    void editorUsesNativeControls();
     void editorGenerationFlow();
 };
 
@@ -95,6 +98,20 @@ void ModelDataTest::objLoadsAndTriangulates()
     QCOMPARE(model.triangleCount(), 2);
 }
 
+void ModelDataTest::editorUsesNativeControls()
+{
+    EditorCanvas editor;
+    editor.resize(1280, 800);
+    editor.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
+
+    QVERIFY2(editor.findChildren<QPushButton *>().size() >= 8,
+             "The editor must be backed by real interactive Qt controls, not a flattened screenshot texture.");
+    QVERIFY2(editor.findChild<QStackedWidget *>(QStringLiteral("StateModal")),
+             "Generation states must use a real modal stack.");
+    editor.close();
+}
+
 void ModelDataTest::editorGenerationFlow()
 {
     EditorCanvas editor;
@@ -103,13 +120,31 @@ void ModelDataTest::editorGenerationFlow()
     editor.show();
     QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
 
-    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(500, 340));
+    QWidget *imageView = editor.findChild<QWidget *>(QStringLiteral("ImageSelectionView"));
+    QVERIFY(imageView);
+    QTest::mouseClick(imageView, Qt::LeftButton, Qt::NoModifier, QPoint(500, 340));
     QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::Selected));
 
-    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(1030, 666));
+    QPushButton *generateButton = nullptr;
+    for (QPushButton *button : editor.findChildren<QPushButton *>()) {
+        if (button->text() == QStringLiteral("生成 3D 模型")) {
+            generateButton = button;
+            break;
+        }
+    }
+    QVERIFY(generateButton);
+    QTest::mouseClick(generateButton, Qt::LeftButton);
     QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::CreditConfirm));
 
-    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(785, 496));
+    QPushButton *confirmButton = nullptr;
+    for (QPushButton *button : editor.findChildren<QPushButton *>()) {
+        if (button->text() == QStringLiteral("确认转换")) {
+            confirmButton = button;
+            break;
+        }
+    }
+    QVERIFY(confirmButton);
+    QTest::mouseClick(confirmButton, Qt::LeftButton);
     QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::Generating));
     QTRY_COMPARE_WITH_TIMEOUT(int(editor.uiState()), int(EditorCanvas::UiState::Result), 2600);
     editor.close();
