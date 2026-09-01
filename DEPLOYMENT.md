@@ -2,7 +2,7 @@
 
 本手册使用一个前台脚本连续完成两项工作：优先复用 OSS 中已经完整发布的离线模型资源，必要时准备并校验完整离线模型资源（SAM 3 + SAM 3D Objects）并上传深圳 OSS；构建统一镜像并推送到阿里云容器镜像服务 ACR。
 
-脚本不会创建或修改函数计算，也不会启动 GPU。OSS Bucket、ACR 仓库、模型授权和云端访问身份需要提前准备。
+脚本不会创建或修改函数计算，也不会启动 GPU。OSS Bucket、可访问目标 Bucket 的现有 OSS 身份或普通 RAM AccessKey、ACR 仓库和登录凭证需要提前准备。
 
 ## 开始前准备
 
@@ -26,7 +26,7 @@
 1. SAM3D 主权重从魔搭社区（ModelScope）的公开模型 [facebook/sam-3d-objects](https://modelscope.cn/models/facebook/sam-3d-objects) 下载。
 2. SAM3 从魔搭社区的公开模型 [facebook/sam3](https://modelscope.cn/models/facebook/sam3) 下载。两套主权重都不需要 Hugging Face Token。
 3. MoGe 与 DINOv2 权重通过 HF-Mirror 的公开直链下载，不需要登录或 Token。
-4. 提前创建深圳地域 OSS Bucket，并准备对目标 Bucket 有读取、列举和上传权限的 ECS RAM Role、ossutil 配置或临时 RAM/STS 凭证。
+4. 提前创建深圳地域 OSS Bucket，并配置对目标 Bucket 有读取、列举和上传权限的 ECS RAM Role、ossutil 身份或环境凭证；也可以准备普通 RAM AccessKey ID 和 AccessKey Secret，在脚本启动时输入。
 5. 香港 ECS 或本地电脑跨地域上传固定使用公网 Endpoint：
 
    ```text
@@ -84,24 +84,24 @@ git status --short
 ./scripts/deploy_from_hk.sh
 ```
 
-脚本首先询问三个非敏感必要信息：
+脚本启动后一次性询问全部 OSS/ACR 信息和凭证，后续执行过程不再要求输入 OSS/ACR 内容：
 
 ```text
 深圳 OSS Bucket 名:
-ACR 完整公网仓库地址（不含协议和 tag）:
-ACR 登录用户名:
-```
-
-SAM3D 或 SAM3 主权重缺失时，脚本会直接从 ModelScope 下载，不会读取 Hugging Face Token。如果现有 ossutil 配置、环境凭证和 ECS RAM Role 都无法访问 Bucket，才会继续读取临时 OSS 凭证。镜像构建完成后再隐藏读取 ACR 密码：
-
-```text
 OSS AccessKey ID:
 OSS AccessKey Secret:
-OSS STS Token（普通 RAM AccessKey 直接回车）:
+ACR 完整公网仓库地址（不含协议和 tag）:
+ACR 登录用户名:
 ACR Registry 密码:
 ```
 
-AccessKey Secret、STS Token 和 Registry 密码不会出现在命令行参数、Git 或最终结果文件中；脚本退出时会清理进程环境和临时 Docker 凭证目录。
+已有可用的 ECS RAM Role、ossutil 身份或 OSS 环境凭证时，AccessKey ID 和 Secret 可以同时留空；否则必须同时填写普通 RAM AccessKey。身份不可用时脚本会直接报错，不会在执行中途再次询问。
+
+AccessKey Secret 和 Registry 密码会隐藏读取，不会出现在命令行参数、Git 或最终结果文件中。手动输入的凭证读取后先保存在未导出的 shell 变量中；OSS AccessKey 只在访问 OSS 期间临时导出，Registry 密码只在镜像构建完成后通过标准输入交给 `docker login`。脚本使用后会立即清空对应变量，退出时还会清理进程环境和临时 Docker 凭证目录。
+
+如果安装系统工具、启动 Docker 或访问 Docker socket 需要 `sudo`，操作系统仍可能按自身策略询问当前用户的本机密码；这不属于 OSS/ACR 输入，脚本不会读取或缓存该密码。
+
+SAM3D 或 SAM3 主权重缺失时，脚本会直接从 ModelScope 下载，不会读取 Hugging Face Token。脚本不再提示输入 OSS STS Token。
 
 宿主 Python 不会被安装项目依赖或写入任何包：脚本不调用 `pip`，也不使用当前账号通过 `PATH`、Conda 或已有 venv 解析到的 Python；它只用 Ubuntu 的 `/usr/bin/python3` 在私有临时目录创建一个 `--without-pip` 的 venv，以 Python isolated mode 运行标准库脚本，并在退出时删除。下载的 ossutil、Docker 客户端配置和构建元数据也都位于同一个私有临时目录；不会改写当前用户的 `PATH`、Python 环境变量、用户级 `site-packages` 或已有 Docker 配置。Docker 镜像、Buildx 缓存和 `$HOME/sam3d-transfer` 中的可续传模型资源属于预期的持久构建产物。
 
@@ -117,11 +117,11 @@ AccessKey Secret、STS Token 和 Registry 密码不会出现在命令行参数�
 8. 使用断点目录上传深圳 OSS，错误报告固定写到 `$HOME/sam3d-transfer/ossutil-output`，不会污染 Git checkout。
 9. 对清单中的每个远端对象执行精确 CRC64 核对；缺失或不一致的对象会强制重传并再次校验，全部成功后才写入完成凭据。
 10. 构建一张 `linux/amd64` 统一镜像。
-11. 构建完成后才登录 ACR，避免 Registry 凭证暴露给模型下载或第三方安装步骤。
+11. ACR 密码虽然在启动时统一读取，但不会导出给模型下载或第三方安装步骤；构建完成后才通过标准输入登录 ACR。
 12. 根据当前 Git commit 和构建后的镜像摘要自动生成不可变 tag，并用于 ACR 发布。
 13. 推送镜像，失败时自动重试并回读远程摘要确认是否已经成功。
 14. 验证远程 Manifest 只有 `linux/amd64`，且没有 `unknown/unknown` attestation。
-15. 写入不含凭证的部署结果，退出 ACR 登录并清理临时凭证目录。
+15. 写入不含凭证的部署结果，退出 ACR 登录并清理进程内凭证及临时 Docker 凭证目录。
 
 固定构建设置由脚本维护，不要求操作人员选择：
 

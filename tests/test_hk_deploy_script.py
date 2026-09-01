@@ -63,18 +63,41 @@ class HongKongDeployScriptTests(unittest.TestCase):
                 self.assertNotIn(removed, self.script)
 
     def test_required_oss_and_acr_information_is_prompted(self) -> None:
-        self.assertIn("深圳 OSS Bucket 名", self.script)
-        self.assertIn("ACR 完整公网仓库地址", self.script)
-        self.assertIn("ACR 登录用户名", self.script)
-        self.assertIn("ACR Registry 密码", self.script)
+        prompt_block = self.script.split("prompt_required_inputs() {", 1)[1].split(
+            "\n}\n\nvalidate_inputs()", 1
+        )[0]
+        prompts = (
+            "深圳 OSS Bucket 名",
+            "OSS AccessKey ID",
+            "OSS AccessKey Secret",
+            "ACR 完整公网仓库地址",
+            "ACR 登录用户名",
+            "ACR Registry 密码",
+        )
+        positions = [prompt_block.index(prompt) for prompt in prompts]
+        self.assertEqual(positions, sorted(positions))
+        interactive_reads = re.findall(
+            r"^\s*read -r(?: -s)? -p .+$", self.script, re.MULTILINE
+        )
+        self.assertEqual(len(interactive_reads), len(prompts))
+        self.assertTrue(all(read in prompt_block for read in interactive_reads))
+        self.assertNotIn("prompt_oss_credentials", self.script)
+        self.assertNotIn("OSS STS Token（普通 RAM AccessKey 直接回车）", self.script)
         self.assertNotIn("Hugging Face Access Token", self.script)
         self.assertNotIn("HF_TOKEN", self.script)
-        self.assertIn("OSS AccessKey Secret", self.script)
         self.assertIn("read -r -s", self.script)
         self.assertNotIn("确认执行", self.script)
         self.assertIn("OSS_BUCKET=''", self.script)
         self.assertIn("ACR_IMAGE=''", self.script)
         self.assertIn("ACR_USERNAME=''", self.script)
+        self.assertIn("CACHED_OSS_ACCESS_KEY_SECRET=''", self.script)
+        self.assertIn("CACHED_ACR_REGISTRY_PASSWORD=''", self.script)
+        self.assertIn(
+            "export -n CACHED_OSS_ACCESS_KEY_ID CACHED_OSS_ACCESS_KEY_SECRET",
+            self.script,
+        )
+        self.assertIn("export -n CACHED_ACR_REGISTRY_PASSWORD", self.script)
+        self.assertIn("AccessKey ID 和 Secret 必须同时填写或同时留空", self.script)
         self.assertNotIn('${ACR_IMAGE:-', self.script)
         self.assertNotIn('${ACR_USERNAME:-', self.script)
 
@@ -119,6 +142,8 @@ class HongKongDeployScriptTests(unittest.TestCase):
 
         main_block = self.script.split("main() {", 1)[1]
         ordered_steps = (
+            "prompt_required_inputs",
+            "validate_inputs",
             "ensure_tool_venv",
             "ensure_ossutil",
             "resolve_asset_recipe",
@@ -791,6 +816,12 @@ printf 'KIND=%s\nDIGEST=%s\nREMOTE_DIGEST=%s\n' \
         self.assertIn("set +x", self.script)
         self.assertIn("read -r -s", self.script)
         self.assertIn("--password-stdin", self.script)
+        login_block = self.script.split("login_acr() {", 1)[1].split(
+            "\n}\n\nget_remote_config_digest()", 1
+        )[0]
+        self.assertNotIn("read -r", login_block)
+        self.assertIn('local password="$CACHED_ACR_REGISTRY_PASSWORD"', login_block)
+        self.assertIn("CACHED_ACR_REGISTRY_PASSWORD=''", login_block)
         self.assertIn('export DOCKER_CONFIG="$TEMP_DIR/docker-config"', self.script)
         self.assertIn("run_docker logout \"$ACR_HOST\"", self.script)
         self.assertIn("safe_remove_temp_dir", self.script)

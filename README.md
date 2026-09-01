@@ -84,7 +84,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 ./scripts/deploy_from_hk.sh
 ```
 
-运行时输入深圳 OSS Bucket、ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码。脚本先根据固定资源内容计算配方 ID，并检查 `sam3d/recipes/<资源配方 ID>/complete.json`；完成凭据及全部远端对象 CRC64 一致时会跳过模型下载和上传。否则，SAM3 与 SAM3D 主权重从魔搭社区（ModelScope）公开模型下载，MoGe 与 DINOv2 权重通过 HF-Mirror 下载，均不需要 Hugging Face Token。现有 OSS 身份不可用时才读取临时 RAM/STS 凭证。模型校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、完成凭据最后发布、镜像构建、推送重试和 Manifest 校验均自动完成。
+脚本启动后一次性输入深圳 OSS Bucket、普通 RAM AccessKey ID/Secret、ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码，后续不再询问 OSS/ACR 内容，也不再提示 OSS STS Token；已有可用 OSS 身份时 AccessKey ID/Secret 可以同时留空。脚本先根据固定资源内容计算配方 ID，并检查 `sam3d/recipes/<资源配方 ID>/complete.json`；完成凭据及全部远端对象 CRC64 一致时会跳过模型下载和上传。否则，SAM3 与 SAM3D 主权重从魔搭社区（ModelScope）公开模型下载，MoGe 与 DINOv2 权重通过 HF-Mirror 下载，均不需要 Hugging Face Token。模型校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、完成凭据最后发布、镜像构建、推送重试和 Manifest 校验均自动完成。
 
 脚本不会创建或修改 FC，也不会启动 GPU。完成输出会给出 ACR 镜像、OSS Bucket 子目录以及固定的容器挂载目录 `/mnt/nas/sam3d`。
 

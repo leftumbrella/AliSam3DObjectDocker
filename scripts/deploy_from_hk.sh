@@ -28,6 +28,11 @@ TRANSFER_ROOT=''
 OSS_BUCKET=''
 ACR_IMAGE=''
 ACR_USERNAME=''
+CACHED_OSS_ACCESS_KEY_ID=''
+CACHED_OSS_ACCESS_KEY_SECRET=''
+CACHED_ACR_REGISTRY_PASSWORD=''
+export -n CACHED_OSS_ACCESS_KEY_ID CACHED_OSS_ACCESS_KEY_SECRET
+export -n CACHED_ACR_REGISTRY_PASSWORD
 ACR_HOST=''
 OSSUTIL_BIN=''
 TOOLS_PYTHON=''
@@ -102,6 +107,8 @@ cleanup() {
     run_docker logout "$ACR_HOST" >/dev/null 2>&1
   fi
   unset ACR_IMAGE ACR_USERNAME ACR_HOST DOCKER_CONFIG
+  unset CACHED_OSS_ACCESS_KEY_ID CACHED_OSS_ACCESS_KEY_SECRET
+  unset CACHED_ACR_REGISTRY_PASSWORD
   unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
   unset OSS_REGION OSS_ENDPOINT
   safe_remove_temp_dir
@@ -136,7 +143,7 @@ require_target_host() {
     22.04|24.04) ;;
     *) warn "当前 Ubuntu ${VERSION_ID:-unknown} 不是已验证的 22.04/24.04" ;;
   esac
-  [[ -t 0 ]] || die '脚本需要交互终端来读取 OSS 和 ACR 信息'
+  [[ -t 0 ]] || die '脚本需要交互终端来一次性读取 OSS 和 ACR 信息及凭证'
 }
 
 run_privileged() {
@@ -150,13 +157,23 @@ run_privileged() {
 }
 
 prompt_required_inputs() {
-  CURRENT_STEP='读取 OSS 和 ACR 必要信息'
+  CURRENT_STEP='一次性读取 OSS 和 ACR 必要信息及凭证'
   read -r -p '深圳 OSS Bucket 名: ' OSS_BUCKET
+  read -r -p 'OSS AccessKey ID: ' CACHED_OSS_ACCESS_KEY_ID
+  read -r -s -p 'OSS AccessKey Secret: ' CACHED_OSS_ACCESS_KEY_SECRET
+  printf '\n'
   read -r -p 'ACR 完整公网仓库地址（不含协议和 tag）: ' ACR_IMAGE
   read -r -p 'ACR 登录用户名: ' ACR_USERNAME
+  read -r -s -p 'ACR Registry 密码: ' CACHED_ACR_REGISTRY_PASSWORD
+  printf '\n'
   [[ -n "$OSS_BUCKET" ]] || die 'OSS Bucket 名不能为空'
+  if [[ -n "$CACHED_OSS_ACCESS_KEY_ID" && -z "$CACHED_OSS_ACCESS_KEY_SECRET" ]] \
+    || [[ -z "$CACHED_OSS_ACCESS_KEY_ID" && -n "$CACHED_OSS_ACCESS_KEY_SECRET" ]]; then
+    die 'OSS AccessKey ID 和 Secret 必须同时填写或同时留空'
+  fi
   [[ -n "$ACR_IMAGE" ]] || die 'ACR 仓库地址不能为空'
   [[ -n "$ACR_USERNAME" ]] || die 'ACR 登录用户名不能为空'
+  [[ -n "$CACHED_ACR_REGISTRY_PASSWORD" ]] || die 'ACR Registry 密码不能为空'
 }
 
 validate_inputs() {
@@ -538,47 +555,33 @@ prepare_offline_assets() {
   OSS_PREFIX="sam3d/releases/${ASSET_RELEASE}"
 }
 
-prompt_oss_credentials() {
-  local access_key_id='' access_key_secret='' session_token=''
-  read -r -p 'OSS AccessKey ID: ' access_key_id
-  read -r -s -p 'OSS AccessKey Secret: ' access_key_secret
-  printf '\n'
-  read -r -s -p 'OSS STS Token（普通 RAM AccessKey 直接回车）: ' session_token
-  printf '\n'
-  [[ -n "$access_key_id" && -n "$access_key_secret" ]] \
-    || die 'OSS AccessKey ID 和 Secret 不能为空'
-  export OSS_ACCESS_KEY_ID=$access_key_id
-  export OSS_ACCESS_KEY_SECRET=$access_key_secret
-  if [[ -n "$session_token" ]]; then
-    export OSS_SESSION_TOKEN=$session_token
-  else
-    unset OSS_SESSION_TOKEN
-  fi
-  access_key_id=''
-  access_key_secret=''
-  session_token=''
-}
-
 ensure_oss_access() {
   CURRENT_STEP='验证深圳 OSS 凭证和 Bucket'
+  local using_input_access_key=0
+  if [[ -n "$CACHED_OSS_ACCESS_KEY_ID" ]]; then
+    export OSS_ACCESS_KEY_ID="$CACHED_OSS_ACCESS_KEY_ID"
+    export OSS_ACCESS_KEY_SECRET="$CACHED_OSS_ACCESS_KEY_SECRET"
+    unset OSS_SESSION_TOKEN
+    using_input_access_key=1
+  elif [[ -n "${OSS_ACCESS_KEY_ID:-}" && -z "${OSS_ACCESS_KEY_SECRET:-}" ]] \
+    || [[ -z "${OSS_ACCESS_KEY_ID:-}" && -n "${OSS_ACCESS_KEY_SECRET:-}" ]]; then
+    die '环境中的 OSS_ACCESS_KEY_ID 和 OSS_ACCESS_KEY_SECRET 必须同时设置'
+  fi
+  CACHED_OSS_ACCESS_KEY_ID=''
+  CACHED_OSS_ACCESS_KEY_SECRET=''
   export OSS_REGION="$OSS_REGION_ID"
   export OSS_ENDPOINT="$OSS_PUBLIC_ENDPOINT"
 
-  if [[ -n "${OSS_ACCESS_KEY_ID:-}" && -z "${OSS_ACCESS_KEY_SECRET:-}" ]] \
-    || [[ -z "${OSS_ACCESS_KEY_ID:-}" && -n "${OSS_ACCESS_KEY_SECRET:-}" ]]; then
-    die 'OSS_ACCESS_KEY_ID 和 OSS_ACCESS_KEY_SECRET 必须同时设置'
-  fi
-
   if "$OSSUTIL_BIN" ls "oss://${OSS_BUCKET}/" >/dev/null 2>&1; then
-    log '深圳 OSS Bucket 和现有凭证验证成功'
+    if [[ "$using_input_access_key" -eq 1 ]]; then
+      log '深圳 OSS Bucket 和输入的 RAM AccessKey 验证成功'
+    else
+      log '深圳 OSS Bucket 和现有 OSS 身份验证成功'
+    fi
     return
   fi
 
-  warn '现有 ossutil 配置、环境凭证或 ECS RAM Role 无法访问目标 Bucket，将读取临时 RAM/STS 凭证'
-  unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
-  prompt_oss_credentials
-  "$OSSUTIL_BIN" ls "oss://${OSS_BUCKET}/" >/dev/null \
-    || die 'OSS 访问失败，请核对 Bucket 名、深圳地域和 RAM 权限'
+  die 'OSS 访问失败；请核对 Bucket、深圳地域和权限，或重新运行并在开头输入普通 RAM AccessKey'
 }
 
 clear_oss_environment() {
@@ -869,12 +872,11 @@ upload_offline_assets() {
 
 login_acr() {
   CURRENT_STEP='登录 ACR'
-  local password=''
+  local password="$CACHED_ACR_REGISTRY_PASSWORD"
+  CACHED_ACR_REGISTRY_PASSWORD=''
   ensure_temp_dir
 
-  read -r -s -p 'ACR Registry 密码: ' password
-  printf '\n'
-  [[ -n "$password" ]] || die 'ACR Registry 密码不能为空'
+  [[ -n "$password" ]] || die '启动时未读取 ACR Registry 密码'
   printf '%s' "$password" | run_docker login \
     --username "$ACR_USERNAME" \
     --password-stdin \

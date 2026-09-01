@@ -20,9 +20,10 @@ class DeploymentGuideContractTests(unittest.TestCase):
     def test_readme_links_the_focused_guide(self) -> None:
         self.assertIn("[香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)", self.readme)
 
-    def test_guide_documents_required_and_conditional_inputs(self) -> None:
+    def test_guide_documents_all_inputs_at_startup(self) -> None:
         for required in (
             "深圳 OSS Bucket 名",
+            "OSS AccessKey ID",
             "ACR 完整公网仓库地址",
             "ACR 登录用户名",
             "ACR Registry 密码",
@@ -32,6 +33,9 @@ class DeploymentGuideContractTests(unittest.TestCase):
                 self.assertIn(required, self.guide)
 
         self.assertNotIn("Hugging Face Access Token", self.guide)
+        self.assertNotIn("OSS STS Token（普通 RAM AccessKey 直接回车）", self.guide)
+        self.assertIn("一次性询问全部 OSS/ACR 信息和凭证", self.guide)
+        self.assertIn("后续执行过程不再要求输入", self.guide)
 
         self.assertIn("脚本没有任何可选参数", self.guide)
         self.assertNotIn("./scripts/deploy_from_hk.sh --", self.guide)
@@ -68,7 +72,7 @@ class DeploymentGuideContractTests(unittest.TestCase):
             "跳过全部模型下载和上传",
             "docker.1ms.run",
             "$HOME/sam3d-transfer/ossutil-output",
-            "构建完成后才登录 ACR",
+            "构建完成后才通过标准输入登录 ACR",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.guide)
