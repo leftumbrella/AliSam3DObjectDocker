@@ -1,4 +1,4 @@
-"""Regression checks for the standalone FC browser test client."""
+"""Regression checks for the standalone FC demo clients."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIENT = ROOT / "test-client.html"
+QT_CLIENT = ROOT / "qt-client" / "src" / "sam3dclient.cpp"
 DEFAULT_ENDPOINT = "https://samd-object-duanxppffx.cn-shenzhen.fcapp.run"
 
 
@@ -35,6 +36,7 @@ class BrowserTestClientContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.html = CLIENT.read_text(encoding="utf-8")
+        cls.qt_client = QT_CLIENT.read_text(encoding="utf-8")
         cls.parser = _ClientMarkupParser()
         cls.parser.feed(cls.html)
 
@@ -49,6 +51,16 @@ class BrowserTestClientContractTests(unittest.TestCase):
             with self.subTest(route=route):
                 self.assertIn(f'"{route}"', self.html)
         self.assertNotIn('"/initialize"', self.html)
+
+    def test_qt_client_only_calls_the_public_runtime_routes(self) -> None:
+        request_paths = set(
+            re.findall(
+                r'makeRequest\(QStringLiteral\("([^"]+)"\)',
+                self.qt_client,
+            )
+        )
+        self.assertEqual(request_paths, {"/readyz", "/segment", "/generate"})
+        self.assertNotIn("/initialize", self.qt_client)
 
     def test_lightweight_checks_are_sequential_and_never_initialize_models(self) -> None:
         match = re.search(
