@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
@@ -16,6 +16,7 @@ from starlette.types import Receive, Scope, Send
 from app.model import ModelManager, ModelNotReadyError, decode_image, decode_mask
 from app.segmenter_client import SegmenterBackendError, SegmenterClient
 from app.settings import Settings
+from shared.internal_http import FC_WARMUP_PATH, require_loopback
 
 LOGGER = logging.getLogger(__name__)
 
@@ -24,7 +25,6 @@ gpu_inference_lock = asyncio.Lock()
 model_manager = ModelManager(settings, inference_lock=gpu_inference_lock)
 segmenter_client = SegmenterClient(
     settings.sam3_internal_url,
-    startup_timeout=settings.sam3_internal_startup_timeout,
     request_timeout=settings.sam3_internal_request_timeout,
 )
 
@@ -73,7 +73,6 @@ async def root() -> dict[str, object]:
             "/healthz",
             "/readyz",
             "/gpu",
-            "/initialize",
             "/segment",
             "/generate",
             "/invoke",
@@ -157,41 +156,32 @@ async def gpu() -> dict[str, object]:
     return result
 
 
-@app.post(
-    "/initialize",
-    summary="FC Initializer 生命周期回调",
-    description="由函数计算在实例启动后调用；业务请求不应手动触发。",
-)
-async def initialize() -> dict[str, object]:
-    sam3d_result, sam3_result = await asyncio.gather(
-        model_manager.initialize(),
-        segmenter_client.initialize(),
-        return_exceptions=True,
+@app.post(FC_WARMUP_PATH, include_in_schema=False)
+async def warmup_sam3d(request: Request) -> dict[str, object]:
+    require_loopback(request)
+    sam3_status = await segmenter_client.ready_status()
+    sam3_ready = bool(
+        sam3_status.get("ready", sam3_status.get("model_loaded", False))
     )
-    errors = [
-        result
-        for result in (sam3d_result, sam3_result)
-        if isinstance(result, BaseException)
-    ]
-    if errors:
-        known = [
-            error
-            for error in errors
-            if isinstance(error, (ModelNotReadyError, SegmenterBackendError))
-        ]
-        if len(known) == len(errors):
-            detail = "; ".join(str(error) for error in known)
-            raise HTTPException(status_code=503, detail=detail)
-        for error in errors:
-            LOGGER.error(
-                "组合模型初始化失败",
-                exc_info=(type(error), error, error.__traceback__),
-            )
-        raise HTTPException(status_code=500, detail="SAM3/SAM3D 模型初始化失败")
+    if not sam3_ready:
+        detail = (
+            sam3_status.get("last_load_error")
+            or segmenter_client.load_error
+            or "SAM3 模型尚未预热"
+        )
+        raise HTTPException(status_code=503, detail=str(detail))
+
+    try:
+        await model_manager.initialize()
+    except ModelNotReadyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        LOGGER.exception("SAM3D 模型预热失败")
+        raise HTTPException(status_code=500, detail="SAM3D 模型预热失败") from exc
 
     return {
-        "initialized": True,
-        "models": {"sam3": True, "sam3d": True},
+        "warmed": True,
+        "model": "sam3d",
         "config_path": str(settings.config_path),
     }
 

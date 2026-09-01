@@ -127,10 +127,13 @@ class SegmenterDockerfileContractTests(unittest.TestCase):
     def test_initializer_is_sync_executable_and_copied_into_combined_image(self) -> None:
         self.assertTrue(INITIALIZER.stat().st_mode & stat.S_IXUSR)
         self.assertEqual(self.initializer.splitlines()[0], "#!/bin/sh")
-        self.assertIn("exec curl", self.initializer)
+        self.assertIn("warm_model SAM3", self.initializer)
+        self.assertIn("warm_model SAM3D", self.initializer)
         self.assertIn("--fail", self.initializer)
-        self.assertIn('--max-time "$INITIALIZER_TIMEOUT"', self.initializer)
-        self.assertIn("http://127.0.0.1:9000/initialize", self.initializer)
+        self.assertIn('--max-time "$remaining"', self.initializer)
+        self.assertIn("http://127.0.0.1:${SAM3_PORT}/_fc/warmup", self.initializer)
+        self.assertIn("http://127.0.0.1:${PUBLIC_PORT}/_fc/warmup", self.initializer)
+        self.assertNotIn("/initialize", self.initializer)
         self.assertNotRegex(self.initializer, r"(?m)(?:^|[ \t])&[ \t]*(?:$|#)")
         self.assertIn(
             "COPY scripts/fc_initializer.sh /srv/scripts/fc_initializer.sh",

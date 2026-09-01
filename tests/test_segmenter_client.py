@@ -6,7 +6,7 @@ import unittest
 
 import httpx
 
-from app.segmenter_client import SegmenterBackendError, SegmenterClient
+from app.segmenter_client import SegmenterClient
 
 
 class SegmenterClientTests(unittest.IsolatedAsyncioTestCase):
@@ -19,15 +19,13 @@ class SegmenterClientTests(unittest.IsolatedAsyncioTestCase):
             "http://127.0.0.1",
         ):
             with self.subTest(url=url), self.assertRaises(ValueError):
-                SegmenterClient(url, startup_timeout=1, request_timeout=1)
+                SegmenterClient(url, request_timeout=1)
 
-    async def test_initialize_status_and_segment_share_the_internal_runtime(self) -> None:
+    async def test_status_and_segment_share_the_internal_runtime(self) -> None:
         requests: list[tuple[str, str]] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append((request.method, request.url.path))
-            if request.url.path == "/initialize":
-                return httpx.Response(200, json={"initialized": True})
             if request.url.path == "/readyz":
                 return httpx.Response(
                     200,
@@ -45,12 +43,10 @@ class SegmenterClientTests(unittest.IsolatedAsyncioTestCase):
 
         client = SegmenterClient(
             "http://127.0.0.1:9001",
-            startup_timeout=1,
             request_timeout=1,
             transport=httpx.MockTransport(handler),
         )
 
-        await client.initialize()
         ready = await client.ready_status()
         gpu = await client.gpu_status()
         result = await client.segment(
@@ -68,26 +64,27 @@ class SegmenterClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             requests,
             [
-                ("POST", "/initialize"),
                 ("GET", "/readyz"),
                 ("GET", "/gpu"),
                 ("POST", "/segment"),
             ],
         )
 
-    async def test_initialize_fails_closed_on_a_malformed_success_body(self) -> None:
+    async def test_malformed_ready_body_keeps_client_unloaded(self) -> None:
         client = SegmenterClient(
             "http://127.0.0.1:9001",
-            startup_timeout=1,
             request_timeout=1,
             transport=httpx.MockTransport(
                 lambda _request: httpx.Response(200, json={"status": "ok"})
             ),
         )
 
-        with self.assertRaisesRegex(SegmenterBackendError, "无效的初始化结果"):
-            await client.initialize()
+        payload = await client.ready_status()
+
+        self.assertEqual(payload, {"status": "ok"})
         self.assertFalse(client.loaded)
+        self.assertEqual(client.load_error, "SAM3 内部服务尚未就绪")
+        self.assertFalse(hasattr(client, "initialize"))
 
 
 if __name__ == "__main__":

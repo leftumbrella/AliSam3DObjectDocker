@@ -44,7 +44,6 @@ class Settings:
     tmp_dir: Path
     cors_allow_origins: tuple[str, ...]
     sam3_internal_url: str = "http://127.0.0.1:9001"
-    sam3_internal_startup_timeout: int = 30
     sam3_internal_request_timeout: int = 1800
     gpu_lock_path: Path = Path("/tmp/sam3d-gpu.lock")
 
@@ -73,10 +72,6 @@ class Settings:
             sam3_internal_url=os.getenv(
                 "SAM3_INTERNAL_URL",
                 "http://127.0.0.1:9001",
-            ),
-            sam3_internal_startup_timeout=_read_positive_int(
-                "SAM3_INTERNAL_STARTUP_TIMEOUT",
-                30,
             ),
             sam3_internal_request_timeout=_read_positive_int(
                 "SAM3_INTERNAL_REQUEST_TIMEOUT",

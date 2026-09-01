@@ -13,7 +13,7 @@
 - 统一版本为 Python 3.12、PyTorch 2.7.1 + cu126；PyTorch3D、gsplat 与 spconv 也统一到 CUDA 12.6 ABI。
 - SAM 3 内部进程监听 `127.0.0.1:9001`；SAM 3D Objects 网关监听 FC 的 `0.0.0.0:9000`。
 - `app.supervisor` 同时管理两个进程；任何一个进程退出，容器都会退出并由 FC 重建。
-- FC Initializer 调用公网进程的 `POST /initialize`；两个进程共用 GPU 文件锁，因此两套模型的 GPU 加载会串行执行。只有两者均成功，实例才算初始化完成。
+- FC Initializer 执行 `/srv/scripts/fc_initializer.sh`；脚本依次调用两个仅允许 loopback 的私有预热入口。两个进程共用 GPU 文件锁，因此两套模型的 GPU 加载会串行执行，只有两者均成功实例才算初始化完成。
 - `/segment` 和 `/generate` 由同一个公网入口提供；内部 SAM 3 端口不会暴露给 FC 触发器。
 
 ```text
@@ -49,7 +49,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 本仓库不创建或修改 FC 函数，也不设置预留实例、函数级并发或单实例并发。`scripts/deploy_from_hk.sh` 只准备 OSS 离线资源并构建、推送 ACR 镜像；弹性与并发由运行平台单独配置。
 
-镜像内部使用共享异步锁和跨进程文件锁，将单个容器内的 GPU 加载与推理串行化。在 FC 控制面把 `/srv/scripts/fc_initializer.sh` 配为 Initializer 命令后，弹性创建的每个新实例会依次加载两个模型；冷启动耗时和 300 秒 Initializer 上限需要在实际运行平台验收。
+镜像内部使用共享异步锁和跨进程文件锁，将单个容器内的 GPU 加载与推理串行化。在 FC 控制面将 Initializer 设置为“执行指令”，命令配置为 `["/bin/sh", "/srv/scripts/fc_initializer.sh"]` 后，弹性创建的每个新实例会依次加载两个模型；不要再配置“调用代码”类型的 `POST /initialize`，该公网接口已经移除。冷启动耗时和 300 秒 Initializer 上限需要在实际运行平台验收。
 
 ## 项目结构
 
@@ -66,7 +66,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 ├── qt-client/               # Qt 5.15.2 桌面演示与 OpenGL 3D 查看器
 ├── scripts/
 │   ├── deploy_from_hk.sh    # OSS 优先复用资源，必要时上传并推送 ACR
-│   ├── fc_initializer.sh    # FC Initializer 回调
+│   ├── fc_initializer.sh    # 通过容器内私有入口依次预热两套模型
 │   └── prepare_offline_assets.py
 ├── constraints-unified.txt  # 防止普通 PyPI 解析器替换 cu126 Torch ABI
 ├── Dockerfile               # 一张镜像、一套 Python/CUDA 环境
@@ -142,10 +142,11 @@ docker manifest inspect --verbose "$REMOTE_IMAGE" | grep -q 'unknown/unknown' &&
 | GET | `/healthz` | 仅检查公网进程是否存活 |
 | GET | `/readyz` | 聚合 SAM3 与 SAM3D 的加载状态 |
 | GET | `/gpu` | 聚合两个运行时的 CUDA 版本与显存指标 |
-| POST | `/initialize` | 仅供 FC Initializer 调用，串行完成两套模型的 GPU 加载 |
 | POST | `/segment` | 原图 + 点选 JSON，返回 PNG Mask |
 | POST | `/generate` | 原图 + Mask，返回 GLB |
 | POST | `/invoke` | 提示使用同一 HTTP 触发器的业务路由 |
+
+公网服务不存在 `/initialize`。预热脚本在容器内分别访问 SAM3 的 `127.0.0.1:9001/_fc/warmup` 和 SAM3D 网关的 `127.0.0.1:9000/_fc/warmup`；两个入口不进入 OpenAPI，并会对非 loopback 请求返回 404。
 
 分割请求示例：
 
@@ -197,7 +198,7 @@ curl -fS -X POST "$FC_URL/generate" \
 
 ## 已知边界
 
-- FC Initializer 最长 300 秒；两个模型都会在这个生命周期阶段初始化。
+- FC Initializer 最长 300 秒；预热脚本必须在同一个总预算内依次完成两个模型的初始化。
 - 跨进程文件锁只保护单个容器，不能跨 FC 实例互斥；弹性扩容后每个实例都会独立预热并常驻两套模型。
 - 统一环境消除了重复的 Python/PyTorch/CUDA 用户态依赖，但两个服务进程仍各自创建 CUDA context，并且两套模型权重仍会常驻显存；显存只能在目标 GPU 上确认。
 - `CORS_ALLOW_ORIGINS=*` 适合匿名测试触发器；生产环境应限制 Origin，并选择符合业务要求的触发器认证方式。

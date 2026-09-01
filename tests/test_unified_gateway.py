@@ -10,33 +10,23 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import UploadFile
+from fastapi.testclient import TestClient
 from PIL import Image
 
 import app.main as gateway
 from app.segmenter_client import SegmentResult
-
-
-class _InitializationProbe:
-    def __init__(self) -> None:
-        self.active = 0
-        self.peak = 0
-
-    async def enter(self) -> None:
-        self.active += 1
-        self.peak = max(self.peak, self.active)
-        await asyncio.sleep(0.01)
-        self.active -= 1
+from shared.internal_http import FC_WARMUP_PATH
 
 
 class _FakeModelManager:
-    def __init__(self, probe: _InitializationProbe) -> None:
+    def __init__(self) -> None:
         self.loaded = False
         self.load_error = None
-        self._probe = probe
+        self.initialize_calls = 0
         self.generate_calls: list[dict[str, object]] = []
 
     async def initialize(self) -> None:
-        await self._probe.enter()
+        self.initialize_calls += 1
         self.loaded = True
 
     async def generate(self, **kwargs: object) -> None:
@@ -47,18 +37,15 @@ class _FakeModelManager:
 
 
 class _FakeSegmenterClient:
-    def __init__(self, probe: _InitializationProbe) -> None:
+    def __init__(self) -> None:
         self.loaded = False
         self.load_error = None
-        self._probe = probe
+        self.ready_calls = 0
         self.segment_calls = 0
 
-    async def initialize(self) -> dict[str, bool]:
-        await self._probe.enter()
-        self.loaded = True
-        return {"initialized": True}
-
     async def ready_status(self) -> dict[str, object]:
+        self.ready_calls += 1
+        self.loaded = True
         return {
             "ready": self.loaded,
             "model_loaded": self.loaded,
@@ -75,17 +62,11 @@ class _FakeSegmenterClient:
 
 
 class UnifiedGatewayTests(unittest.TestCase):
-    def test_initializer_loads_both_models_and_one_endpoint_proxies_segment(self) -> None:
-        probe = _InitializationProbe()
-        model = _FakeModelManager(probe)
-        segmenter = _FakeSegmenterClient(probe)
+    def test_private_warmup_syncs_models_and_business_routes_remain_public(self) -> None:
+        model = _FakeModelManager()
+        segmenter = _FakeSegmenterClient()
 
         async def exercise() -> None:
-            initialized = await gateway.initialize()
-            self.assertEqual(
-                initialized["models"],
-                {"sam3": True, "sam3d": True},
-            )
             ready = await gateway.readyz()
             self.assertTrue(ready["ready"])
             self.assertTrue(ready["models"]["sam3"]["model_loaded"])
@@ -123,9 +104,22 @@ class UnifiedGatewayTests(unittest.TestCase):
             patch.object(gateway, "model_manager", model),
             patch.object(gateway, "segmenter_client", segmenter),
         ):
+            with TestClient(gateway.app, client=("127.0.0.1", 50000)) as client:
+                removed = client.post("/initialize")
+                warmed = client.post(FC_WARMUP_PATH)
+                openapi_paths = client.get("/openapi.json").json()["paths"]
+            with TestClient(gateway.app) as external_client:
+                blocked = external_client.post(FC_WARMUP_PATH)
             asyncio.run(exercise())
 
-        self.assertEqual(probe.peak, 2)
+        self.assertEqual(removed.status_code, 404)
+        self.assertEqual(blocked.status_code, 404)
+        self.assertEqual(warmed.status_code, 200, warmed.text)
+        self.assertEqual(warmed.json()["model"], "sam3d")
+        self.assertNotIn("/initialize", openapi_paths)
+        self.assertNotIn(FC_WARMUP_PATH, openapi_paths)
+        self.assertEqual(model.initialize_calls, 1)
+        self.assertGreaterEqual(segmenter.ready_calls, 2)
         self.assertEqual(segmenter.segment_calls, 1)
         self.assertEqual(len(model.generate_calls), 1)
         self.assertNotIn("output_format", model.generate_calls[0])

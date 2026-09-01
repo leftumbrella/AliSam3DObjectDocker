@@ -39,15 +39,12 @@ class SegmenterClient:
         self,
         base_url: str,
         *,
-        startup_timeout: float,
         request_timeout: float,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = _validate_loopback_url(base_url)
-        self._startup_timeout = startup_timeout
         self._request_timeout = request_timeout
         self._transport = transport
-        self._load_lock = asyncio.Lock()
         self._loaded = False
         self._load_error: str | None = None
 
@@ -59,57 +56,33 @@ class SegmenterClient:
     def load_error(self) -> str | None:
         return self._load_error
 
-    async def initialize(self) -> dict[str, Any]:
-        if self._loaded:
-            return {"initialized": True}
-
-        async with self._load_lock:
-            if self._loaded:
-                return {"initialized": True}
-            deadline = asyncio.get_running_loop().time() + self._startup_timeout
-            while True:
-                try:
-                    response = await self._request("POST", "/initialize")
-                    break
-                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                    if asyncio.get_running_loop().time() >= deadline:
-                        self._load_error = f"{type(exc).__name__}: {exc}"
-                        raise SegmenterBackendError(
-                            "SAM3 内部服务未能在启动窗口内监听"
-                        ) from exc
-                    await asyncio.sleep(0.1)
-
-            payload = _response_payload(response)
-            if response.is_error:
-                detail = _response_detail(payload, response)
-                self._load_error = detail
-                raise SegmenterBackendError(detail, status_code=response.status_code)
-            if payload.get("initialized") is not True:
-                self._load_error = "SAM3 内部服务返回了无效的初始化结果"
-                raise SegmenterBackendError(self._load_error)
-            self._loaded = True
-            self._load_error = None
-            return payload
-
     async def ready_status(self) -> dict[str, Any]:
         try:
             response = await self._request("GET", "/readyz", timeout=5.0)
         except httpx.HTTPError as exc:
             self._loaded = False
+            self._load_error = f"{type(exc).__name__}: {exc}"
             return {
                 "ready": False,
                 "model_loaded": False,
-                "last_load_error": f"{type(exc).__name__}: {exc}",
+                "last_load_error": self._load_error,
             }
         payload = _response_payload(response)
         if response.is_error:
             self._loaded = False
+            self._load_error = _response_detail(payload, response)
             return {
                 "ready": False,
                 "model_loaded": False,
-                "last_load_error": _response_detail(payload, response),
+                "last_load_error": self._load_error,
             }
         self._loaded = bool(payload.get("model_loaded", payload.get("ready", False)))
+        last_load_error = payload.get("last_load_error")
+        self._load_error = (
+            None
+            if self._loaded
+            else str(last_load_error or "SAM3 内部服务尚未就绪")
+        )
         return payload
 
     async def gpu_status(self) -> dict[str, Any]:

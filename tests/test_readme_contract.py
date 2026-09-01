@@ -43,6 +43,13 @@ class ReadmeImagePublishingContractTests(unittest.TestCase):
         self.assertIn("exit 1", block)
         self.assertIn("docker manifest inspect --verbose", block)
 
+    def test_initializer_is_script_driven_and_not_a_public_api(self) -> None:
+        self.assertIn('["/bin/sh", "/srv/scripts/fc_initializer.sh"]', self.readme)
+        self.assertIn("127.0.0.1:9001/_fc/warmup", self.readme)
+        self.assertIn("127.0.0.1:9000/_fc/warmup", self.readme)
+        self.assertIn("公网服务不存在 `/initialize`", self.readme)
+        self.assertNotRegex(self.readme, r"\| POST \| `/initialize` \|")
+
 
 if __name__ == "__main__":
     unittest.main()

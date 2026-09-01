@@ -18,6 +18,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from shared.internal_http import FC_WARMUP_PATH
 from segmenter.main import create_app
 from segmenter.model import (
     PointPrompt,
@@ -544,15 +545,17 @@ class SegmenterHttpContractTests(unittest.TestCase):
             self.assertEqual(outside.status_code, 422)
             self.assertIn("3x2", outside.json()["detail"])
 
-    def test_initializer_is_the_only_load_path_and_cors_preflight_is_enabled(self) -> None:
+    def test_warmup_is_loopback_only_hidden_and_cors_preflight_is_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = FakeRuntime(loaded=False)
             app = create_app(
                 settings=_settings(Path(directory)),
                 segmenter=runtime,  # type: ignore[arg-type]
             )
-            with TestClient(app) as client:
-                initialized = client.post("/initialize")
+            with TestClient(app, client=("127.0.0.1", 50000)) as client:
+                warmed = client.post(FC_WARMUP_PATH)
+                removed = client.post("/initialize")
+                openapi_paths = client.get("/openapi.json").json()["paths"]
                 preflight = client.options(
                     "/segment",
                     headers={
@@ -560,8 +563,16 @@ class SegmenterHttpContractTests(unittest.TestCase):
                         "Access-Control-Request-Method": "POST",
                     },
                 )
-            self.assertEqual(initialized.status_code, 200)
+            with TestClient(app) as external_client:
+                blocked = external_client.post(FC_WARMUP_PATH)
+
+            self.assertEqual(warmed.status_code, 200, warmed.text)
+            self.assertTrue(warmed.json()["warmed"])
             self.assertEqual(runtime.initialize_calls, 1)
+            self.assertEqual(removed.status_code, 404)
+            self.assertEqual(blocked.status_code, 404)
+            self.assertNotIn("/initialize", openapi_paths)
+            self.assertNotIn(FC_WARMUP_PATH, openapi_paths)
             self.assertEqual(preflight.status_code, 200)
             self.assertEqual(preflight.headers["access-control-allow-origin"], "*")
 

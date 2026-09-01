@@ -5,11 +5,12 @@ import logging
 import math
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
+from shared.internal_http import FC_WARMUP_PATH, require_loopback
 from segmenter.model import (
     PointPrompt,
     SegmenterManager,
@@ -51,7 +52,7 @@ def create_app(
             "service": "sam3-segmenter-fc",
             "status": "ok",
             "model_loaded": runtime_segmenter.loaded,
-            "endpoints": ["/healthz", "/readyz", "/gpu", "/initialize", "/segment"],
+            "endpoints": ["/healthz", "/readyz", "/gpu", "/segment"],
         }
 
     @app.get("/healthz")
@@ -97,12 +98,9 @@ def create_app(
             )
         return result
 
-    @app.post(
-        "/initialize",
-        summary="FC Initializer 生命周期回调",
-        description="由函数计算在实例启动后调用；业务请求不应手动触发。",
-    )
-    async def initialize() -> dict[str, object]:
+    @app.post(FC_WARMUP_PATH, include_in_schema=False)
+    async def warmup(request: Request) -> dict[str, object]:
+        require_loopback(request)
         try:
             await runtime_segmenter.initialize()
         except SegmenterNotReadyError as exc:
@@ -111,7 +109,8 @@ def create_app(
             LOGGER.exception("SAM3 点选分割模型初始化失败")
             raise HTTPException(status_code=500, detail="SAM3 点选分割模型初始化失败") from exc
         return {
-            "initialized": True,
+            "warmed": True,
+            "model": "sam3",
             "checkpoint_path": str(runtime_settings.checkpoint_path),
         }
 
