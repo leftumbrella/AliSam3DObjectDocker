@@ -3,11 +3,16 @@
 
 #include <QBuffer>
 #include <QDataStream>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFile>
 #include <QHash>
 #include <QImage>
+#include <QMimeData>
 #include <QPainter>
 #include <QPushButton>
+#include <QPointer>
+#include <QLabel>
 #include <QStackedWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -143,8 +148,11 @@ private:
             reply(socket, QByteArrayLiteral("{\"ready\":true}"), "application/json");
         } else if (requestLine.startsWith("POST /segment ")) {
             segmentBodies.append(body);
-            const auto sendMask = [this, socket] {
-                reply(socket, m_mask, "image/png",
+            const QByteArray responseMask = m_mask;
+            const auto sendMask = [guard = QPointer<QTcpSocket>(socket), responseMask] {
+                if (!guard || guard->state() != QAbstractSocket::ConnectedState)
+                    return;
+                reply(guard, responseMask, "image/png",
                       QByteArrayLiteral("X-Segment-Score: 0.960000\r\n"));
             };
             if (m_segmentDelayMs > 0)
@@ -194,6 +202,16 @@ QPushButton *buttonWithText(QWidget &parent, const QString &text)
     return nullptr;
 }
 
+QByteArray multipartField(const QByteArray &body, const QByteArray &name)
+{
+    const int field = body.indexOf("name=\"" + name + "\"");
+    if (field < 0)
+        return {};
+    const int start = body.indexOf("\r\n\r\n", field) + 4;
+    const int end = body.indexOf("\r\n--", start);
+    return start >= 4 && end >= start ? body.mid(start, end - start) : QByteArray();
+}
+
 QColor colorAtWidgetPoint(const QPixmap &pixmap,
                           const QSize &widgetSize,
                           const QPoint &widgetPoint)
@@ -237,6 +255,8 @@ private slots:
     void editorRendersFunctionMaskWithCorrectAlpha();
     void editorQueuesLatestPointsWhileSegmentationIsBusy();
     void editorUsesFunctionComputeForSelectionAndGeneration();
+    void selectedImageLeavesDemoAndUsesOriginalCoordinates();
+    void replacingImageDiscardsPendingSelection();
 };
 
 void ModelDataTest::proceduralModelHasGeometry()
@@ -419,6 +439,98 @@ void ModelDataTest::editorUsesFunctionComputeForSelectionAndGeneration()
     QVERIFY(server.generationBodies.first().contains("name=\"seed\""));
     QVERIFY(!server.generationBodies.first().contains("output_format"));
     editor.close();
+}
+
+void ModelDataTest::selectedImageLeavesDemoAndUsesOriginalCoordinates()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString fileName = directory.filePath(QStringLiteral("自选显微图片.png"));
+    QImage source(240, 480, QImage::Format_RGB32);
+    source.fill(QColor(50, 100, 150));
+    QVERIFY(source.save(fileName));
+    FakeFunctionServer server(source.size(), minimalGlb());
+    QVERIFY(server.listen());
+
+    EditorCanvas editor;
+    QVERIFY(editor.setServiceEndpoint(server.endpoint()));
+    editor.resize(1280, 800);
+    editor.setDemoState(QStringLiteral("selected"));
+    QString error;
+    QVERIFY2(editor.loadImage(fileName, &error), qPrintable(error));
+    QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::Waiting));
+    editor.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
+    QVERIFY(editor.findChild<QPushButton *>(QStringLiteral("OpenImageButton")));
+    QVERIFY(editor.findChild<QLabel *>(QStringLiteral("TitleLabel"))->text().contains(QStringLiteral("自选显微图片")));
+    auto *generate = buttonWithText(editor, QStringLiteral("生成 3D 模型"));
+    QVERIFY(generate);
+    QVERIFY(!generate->isEnabled());
+    auto *view = editor.findChild<QWidget *>(QStringLiteral("ImageSelectionView"));
+    QVERIFY(view);
+    QTest::mouseClick(view, Qt::LeftButton, Qt::NoModifier, QPoint(30, 300));
+    QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::Waiting));
+    QVERIFY(server.segmentBodies.isEmpty());
+    QTest::mouseClick(view, Qt::LeftButton, Qt::NoModifier, QPoint(640, 367));
+    QTRY_VERIFY_WITH_TIMEOUT(generate->isEnabled(), 3000);
+    QCOMPARE(server.segmentBodies.size(), 1);
+    QCOMPARE(QImage::fromData(multipartField(server.segmentBodies.first(), "image")), source);
+    const QByteArray points = multipartField(server.segmentBodies.first(), "points");
+    QVERIFY(points.contains("\"x\":120"));
+    QVERIFY(points.contains("\"y\":240"));
+
+    // A bad replacement must leave the valid image and its selection usable.
+    QVERIFY(!editor.loadImage(directory.filePath(QStringLiteral("missing.png")), &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(generate->isEnabled());
+    QTest::mouseClick(generate, Qt::LeftButton);
+    QTest::mouseClick(buttonWithText(editor, QStringLiteral("确认转换")), Qt::LeftButton);
+    QTRY_COMPARE_WITH_TIMEOUT(int(editor.uiState()), int(EditorCanvas::UiState::Result), 3000);
+    QCOMPARE(server.generationBodies.size(), 1);
+    QCOMPARE(QImage::fromData(multipartField(server.generationBodies.first(), "image")), source);
+    QCOMPARE(QImage::fromData(multipartField(server.generationBodies.first(), "mask")).size(), source.size());
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(fileName)});
+    QDragEnterEvent drag(QPoint(640, 367), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&editor, &drag);
+    QVERIFY(drag.isAccepted());
+    QDropEvent drop(QPointF(640, 367), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&editor, &drop);
+    QVERIFY(drop.isAccepted());
+    QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::Waiting));
+    QVERIFY(!generate->isEnabled());
+}
+
+void ModelDataTest::replacingImageDiscardsPendingSelection()
+{
+    const QImage sample(QStringLiteral(":/design/sample-microbe.png"));
+    FakeFunctionServer server(sample.size(), minimalGlb());
+    server.setSegmentDelay(250);
+    QVERIFY(server.listen());
+    QTemporaryDir directory;
+    QImage replacement(320, 240, QImage::Format_RGB32);
+    replacement.fill(Qt::green);
+    const QString path = directory.filePath(QStringLiteral("replacement.png"));
+    QVERIFY(replacement.save(path));
+
+    EditorCanvas editor;
+    QVERIFY(editor.setServiceEndpoint(server.endpoint()));
+    editor.resize(1280, 800);
+    editor.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
+    auto *view = editor.findChild<QWidget *>(QStringLiteral("ImageSelectionView"));
+    QVERIFY(view);
+    QTest::mouseClick(view, Qt::LeftButton, Qt::NoModifier, QPoint(500, 340));
+    QTRY_COMPARE_WITH_TIMEOUT(server.segmentBodies.size(), 1, 2000);
+    QVERIFY(editor.loadImage(path));
+    server.setMask(pngMask(replacement.size()));
+    QTest::mouseClick(view, Qt::LeftButton, Qt::NoModifier, QPoint(640, 367));
+    auto *generate = buttonWithText(editor, QStringLiteral("生成 3D 模型"));
+    QVERIFY(generate);
+    QTRY_VERIFY_WITH_TIMEOUT(generate->isEnabled(), 3000);
+    QCOMPARE(server.segmentBodies.size(), 2);
+    QCOMPARE(server.segmentBodies.last().count("\"label\""), 1);
+    QCOMPARE(QImage::fromData(multipartField(server.segmentBodies.last(), "image")), replacement);
 }
 
 QTEST_MAIN(ModelDataTest)

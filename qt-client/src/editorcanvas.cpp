@@ -3,17 +3,21 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QButtonGroup>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QEasingCurve>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QImageReader>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
+#include <QMimeData>
 #include <QOpenGLFunctions_2_1>
 #include <QOpenGLWidget>
 #include <QPainter>
@@ -333,9 +337,10 @@ public:
         setAccessibleName(QStringLiteral("显微图像选区画布"));
     }
 
-    void setSourceImage(const QImage &image)
+    void setSourceImage(const QImage &image, bool fitWholeImage = false)
     {
         m_image = image;
+        m_fitWholeImage = fitWholeImage;
         m_maskOverlay = QImage();
         update();
     }
@@ -458,9 +463,8 @@ protected:
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         painter.fillRect(rect(), Theme::canvas);
 
-        const qreal fullWidth = targetWidth();
         if (!m_image.isNull()) {
-            const QRectF target(0, 0, fullWidth, height());
+            const QRectF target = imageTargetRect();
             const QRectF source = imageSourceRect();
             painter.drawImage(target, m_image, source);
             if (!m_maskOverlay.isNull())
@@ -531,6 +535,16 @@ private:
         return m_split ? width() * 2.0 : width();
     }
 
+    QRectF imageTargetRect() const
+    {
+        if (!m_fitWholeImage)
+            return QRectF(0, 0, targetWidth(), height());
+        // Keep every pixel of a user's image clear of the floating controls.
+        const QRectF available(24, 108, qMax(1, width() - 48), qMax(1, height() - 282));
+        const QSizeF fitted = QSizeF(m_image.size()).scaled(available.size(), Qt::KeepAspectRatio);
+        return QRectF(available.center() - QPointF(fitted.width() / 2, fitted.height() / 2), fitted);
+    }
+
     QRectF imageSourceRect() const
     {
         if (m_image.isNull() || height() <= 0 || targetWidth() <= 0)
@@ -538,6 +552,8 @@ private:
         const qreal imageAspect = qreal(m_image.width()) / qreal(m_image.height());
         const qreal targetAspect = targetWidth() / qreal(height());
         QRectF source(0, 0, m_image.width(), m_image.height());
+        if (m_fitWholeImage)
+            return source;
         if (imageAspect > targetAspect) {
             const qreal sourceWidth = m_image.height() * targetAspect;
             source.setLeft((m_image.width() - sourceWidth) * 0.5);
@@ -553,26 +569,28 @@ private:
     QPointF targetToImage(const QPointF &point) const
     {
         const QRectF source = imageSourceRect();
-        if (source.isEmpty() || point.x() < 0.0 || point.x() > targetWidth()
-            || point.y() < 0.0 || point.y() > height())
+        const QRectF target = imageTargetRect();
+        if (source.isEmpty() || target.isEmpty() || !target.contains(point))
             return QPointF(-1.0, -1.0);
-        return QPointF(source.left() + point.x() / targetWidth() * source.width(),
-                       source.top() + point.y() / qreal(height()) * source.height());
+        return QPointF(source.left() + (point.x() - target.left()) / target.width() * source.width(),
+                       source.top() + (point.y() - target.top()) / target.height() * source.height());
     }
 
     QPointF imageToTarget(const QPointF &point) const
     {
         const QRectF source = imageSourceRect();
+        const QRectF target = imageTargetRect();
         if (source.isEmpty())
             return {};
-        return QPointF((point.x() - source.left()) / source.width() * targetWidth(),
-                       (point.y() - source.top()) / source.height() * height());
+        return QPointF(target.left() + (point.x() - source.left()) / source.width() * target.width(),
+                       target.top() + (point.y() - source.top()) / source.height() * target.height());
     }
 
     QImage m_image;
     QImage m_maskOverlay;
     QVector<SelectionMark> m_marks;
     bool m_split = false;
+    bool m_fitWholeImage = false;
     bool m_addMode = true;
     bool m_interactive = true;
     bool m_pressed = false;
@@ -800,6 +818,7 @@ EditorCanvas::EditorCanvas(QWidget *parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(1180, 720);
+    setAcceptDrops(true);
 
     m_sourceImage.load(QStringLiteral(":/design/sample-microbe.png"));
     m_client = new Sam3dClient(this);
@@ -1097,6 +1116,11 @@ void EditorCanvas::buildTopBar()
         else
             showToast(QStringLiteral("请先生成 3D 模型"), QStringLiteral("完成选区后即可转换并保存"), false);
     });
+
+    m_openImageButton = createTextButton(QStringLiteral("选择图片"), QStringLiteral("OpenImageButton"),
+                                         m_topBar, makeIcon(IconKind::Image));
+    m_openImageButton->setToolTip(QStringLiteral("选择本地图片 (Ctrl+O)，也可将图片拖入窗口"));
+    connect(m_openImageButton, &QPushButton::clicked, this, [this] { openImage(); });
 }
 
 void EditorCanvas::buildStatusBar()
@@ -1392,6 +1416,7 @@ void EditorCanvas::layoutInterface()
     m_titleLabel->setGeometry(130, 8, 400, 48);
     m_exitButton->setGeometry(m_topBar->width() / 2 - 72, 10, 144, 42);
     m_saveButton->setGeometry(m_topBar->width() - 94, 10, 82, 44);
+    m_openImageButton->setGeometry(m_topBar->width() - 234, 10, 128, 44);
 
     const int editorLeft = (canvasWidth - 980) / 2;
     const int statusTop = canvasHeight - 159;
@@ -1527,32 +1552,56 @@ void EditorCanvas::updateSelectionState()
 
 void EditorCanvas::openImage()
 {
-    const QString initial = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    const QString fileName = QFileDialog::getOpenFileName(this, QStringLiteral("导入显微图像"), initial,
-                                                          QStringLiteral("图像 (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"));
+    const QString initial = m_imagePath.isEmpty()
+                                ? QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
+                                : QFileInfo(m_imagePath).absolutePath();
+    const QString fileName = QFileDialog::getOpenFileName(this, QStringLiteral("选择显微图片"), initial,
+        QStringLiteral("图片 (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;所有文件 (*)"));
     if (fileName.isEmpty())
         return;
 
-    QImage image(fileName);
+    QString error;
+    if (!loadImage(fileName, &error))
+        showToast(QStringLiteral("无法读取所选图片"), error, false);
+}
+
+bool EditorCanvas::loadImage(const QString &fileName, QString *error)
+{
+    QImageReader reader(fileName);
+    reader.setAutoTransform(true);
+    const QImage image = reader.read();
     if (image.isNull()) {
-        showToast(QStringLiteral("无法读取所选图像"), QStringLiteral("请选择有效的 PNG、JPG、BMP 或 TIFF 文件"), false);
-        return;
+        if (error)
+            *error = QStringLiteral("请选择有效图片：%1").arg(reader.errorString());
+        return false;
     }
 
+    // Invalidate old work before aborting, since cancellation emits signals synchronously.
+    ++m_selectionRevision;
     m_segmentQueued = false;
     m_client->cancelSegmentation();
     m_client->cancelGeneration();
-    ++m_selectionRevision;
+    m_segmentBusy = false;
+    m_demoStateLocked = false;
     m_maskReady = false;
     m_maskImage = QImage();
     m_selectionError.clear();
     m_model.clear();
+    m_modelView->resetView();
     m_sourceImage = image;
-    m_imageView->setSourceImage(m_sourceImage);
+    m_imageView->setSourceImage(m_sourceImage, true);
     m_imageView->clearSelections(false);
     m_imageName = QFileInfo(fileName).completeBaseName();
+    m_imagePath = QFileInfo(fileName).absoluteFilePath();
+    m_addMode = true;
+    m_aiSwitch->setChecked(true);
+    m_savedToastVisible = false;
+    m_toastTimer.stop();
+    m_titleLabel->setToolTip(QFileInfo(fileName).fileName());
     setState(UiState::Waiting, false);
-    showToast(QStringLiteral("图像已导入"), m_imageName, false);
+    if (error)
+        error->clear();
+    return true;
 }
 
 void EditorCanvas::rotateImage()
@@ -1568,7 +1617,7 @@ void EditorCanvas::rotateImage()
     m_maskImage = QImage();
     m_selectionError.clear();
     m_sourceImage = m_sourceImage.transformed(transform, Qt::SmoothTransformation);
-    m_imageView->setSourceImage(m_sourceImage);
+    m_imageView->setSourceImage(m_sourceImage, !m_imagePath.isEmpty());
     m_imageView->clearSelections(false);
     setState(UiState::Waiting, false);
     showToast(QStringLiteral("图像已旋转"), QStringLiteral("顺时针旋转 90°"), false);
@@ -1741,6 +1790,28 @@ void EditorCanvas::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
     layoutInterface();
+}
+
+void EditorCanvas::dragEnterEvent(QDragEnterEvent *event)
+{
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if (urls.size() == 1 && urls.first().isLocalFile()) {
+        QImageReader reader(urls.first().toLocalFile());
+        if (reader.canRead())
+            event->acceptProposedAction();
+    }
+}
+
+void EditorCanvas::dropEvent(QDropEvent *event)
+{
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if (urls.size() != 1 || !urls.first().isLocalFile())
+        return;
+    QString error;
+    if (loadImage(urls.first().toLocalFile(), &error))
+        event->acceptProposedAction();
+    else
+        showToast(QStringLiteral("无法读取所选图片"), error, false);
 }
 
 void EditorCanvas::keyPressEvent(QKeyEvent *event)

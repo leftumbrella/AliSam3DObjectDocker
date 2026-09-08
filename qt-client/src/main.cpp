@@ -32,6 +32,7 @@ int main(int argc, char *argv[])
 
     QString stateName;
     QString endpoint;
+    QString imagePath;
     QString screenshotPath;
     bool maximize = false;
     const QStringList arguments = application.arguments();
@@ -40,6 +41,8 @@ int main(int argc, char *argv[])
             stateName = argument.mid(QStringLiteral("--state=").size());
         else if (argument.startsWith(QStringLiteral("--endpoint=")))
             endpoint = argument.mid(QStringLiteral("--endpoint=").size());
+        else if (argument.startsWith(QStringLiteral("--image=")))
+            imagePath = argument.mid(QStringLiteral("--image=").size());
         else if (argument.startsWith(QStringLiteral("--screenshot=")))
             screenshotPath = argument.mid(QStringLiteral("--screenshot=").size());
         else if (argument == QStringLiteral("--maximized"))
@@ -55,6 +58,13 @@ int main(int argc, char *argv[])
     }
     if (!stateName.isEmpty())
         window.setDemoState(stateName);
+    if (!imagePath.isEmpty()) {
+        QString error;
+        if (!window.loadImage(imagePath, &error)) {
+            qCritical().noquote() << error;
+            return 2;
+        }
+    }
 
     if (maximize) {
         window.showMaximized();

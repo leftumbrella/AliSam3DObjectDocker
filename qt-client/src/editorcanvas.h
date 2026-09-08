@@ -13,6 +13,8 @@ class ImageSelectionView;
 class ModelViewport;
 class ToggleSwitch;
 class QFrame;
+class QDragEnterEvent;
+class QDropEvent;
 class QGraphicsOpacityEffect;
 class QKeyEvent;
 class QLabel;
@@ -40,6 +42,7 @@ public:
     ~EditorCanvas() override;
 
     void setDemoState(const QString &stateName);
+    bool loadImage(const QString &fileName, QString *error = nullptr);
     bool setServiceEndpoint(const QUrl &endpoint, QString *error = nullptr);
     QUrl serviceEndpoint() const;
     UiState uiState() const { return m_state; }
@@ -47,6 +50,8 @@ public:
 protected:
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
 private:
     void buildInterface();
@@ -89,6 +94,7 @@ private:
     Sam3dClient *m_client = nullptr;
     UiState m_state = UiState::Waiting;
     QString m_imageName = QStringLiteral("叶片表皮");
+    QString m_imagePath;
     QString m_modelName = QStringLiteral("SAM 有机体模型");
     bool m_addMode = true;
     bool m_savedToastVisible = false;
@@ -110,6 +116,7 @@ private:
     QLabel *m_titleLabel = nullptr;
     QPushButton *m_exitButton = nullptr;
     QPushButton *m_saveButton = nullptr;
+    QPushButton *m_openImageButton = nullptr;
 
     QFrame *m_statusBar = nullptr;
     QLabel *m_statusIcon = nullptr;
