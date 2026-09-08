@@ -74,7 +74,9 @@ COPY patches/fc-runtime.patch /tmp/fc-runtime.patch
 
 # This patch is coupled to the pinned SAM3D commit and removes optional
 # notebook/visualization imports from the FC inference path.
-RUN git apply --check /tmp/fc-runtime.patch \
+# Normalize existing Windows checkouts as well as enforcing LF in Git.
+RUN sed -i 's/\r$//' /tmp/fc-runtime.patch \
+    && git apply --check /tmp/fc-runtime.patch \
     && git apply /tmp/fc-runtime.patch \
     && rm /tmp/fc-runtime.patch
 

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shlex
+import subprocess
+import tempfile
 import unittest
 
 
@@ -119,6 +122,68 @@ class DockerfileCudaBuildContractTests(unittest.TestCase):
             '-os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]',
             runtime_patch,
         )
+
+    def test_windows_checkout_preserves_runtime_patch_lf(self) -> None:
+        patch_bytes = (ROOT / "patches" / "fc-runtime.patch").read_bytes()
+        patch_bytes = patch_bytes.replace(b"\r\n", b"\n")
+        self.assertIn(b"\n", patch_bytes)
+        with tempfile.TemporaryDirectory() as directory:
+            checkout = Path(directory)
+            (checkout / ".gitattributes").write_bytes(
+                (ROOT / ".gitattributes").read_bytes()
+            )
+            patch = checkout / "runtime.patch"
+            patch.write_bytes(patch_bytes)
+            git = [
+                "git", "-C", str(checkout),
+                "-c", "core.autocrlf=true", "-c", "core.safecrlf=false",
+            ]
+            for args in (
+                ["init", "--quiet"],
+                ["add", ".gitattributes", "runtime.patch"],
+            ):
+                subprocess.run(git + args, check=True, capture_output=True)
+            patch.unlink()
+            subprocess.run(
+                git + ["checkout-index", "--", "runtime.patch"],
+                check=True, capture_output=True,
+            )
+            self.assertEqual(patch.read_bytes(), patch_bytes)
+
+    def test_runtime_patch_build_step_accepts_crlf_but_rejects_source_drift(self) -> None:
+        block = next(
+            block for block in self.run_blocks
+            if "git apply --check /tmp/fc-runtime.patch" in block
+        )
+        patch_bytes = (
+            b"diff --git a/example.py b/example.py\n"
+            b"--- a/example.py\n+++ b/example.py\n"
+            b"@@ -1,3 +1,3 @@\n first\n-before\n+after\n last\n"
+        )
+        for newline, source_matches in ((b"\n", True), (b"\r\n", True), (b"\r\n", False)):
+            with self.subTest(newline=newline, source_matches=source_matches):
+                with tempfile.TemporaryDirectory() as directory:
+                    checkout = Path(directory)
+                    source = checkout / "example.py"
+                    original = b"first\nbefore\nlast\n" if source_matches else b"first\ndrift\nlast\n"
+                    source.write_bytes(original)
+                    patch = checkout / "runtime.patch"
+                    patch.write_bytes(patch_bytes.replace(b"\n", newline))
+                    command = block.removeprefix("RUN ").replace(
+                        "/tmp/fc-runtime.patch", shlex.quote(str(patch))
+                    )
+                    result = subprocess.run(
+                        ["sh", "-c", command], cwd=checkout,
+                        text=True, capture_output=True, check=False,
+                    )
+                    if source_matches:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(source.read_bytes(), b"first\nafter\nlast\n")
+                        self.assertFalse(patch.exists())
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("patch does not apply", result.stderr)
+                        self.assertEqual(source.read_bytes(), original)
 
     def test_offline_source_patch_keeps_expensive_cuda_layers_cacheable(self) -> None:
         gsplat_build = self.dockerfile.index(
