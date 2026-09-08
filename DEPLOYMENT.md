@@ -54,6 +54,39 @@
 
 Docker Personal 免费方案提供不限数量的公开仓库和 1 个私有仓库，受拉取频率和合理使用政策约束，见 [Docker 价格页](https://www.docker.com/pricing/) 和 [使用限制](https://docs.docker.com/docker-hub/usage/)。公开仓库中的代码及镜像层可被任何人下载；脚本沿用已创建仓库的可见性。
 
+### WSL2 / Linux 使用网络代理
+
+终端设置了 `HTTP_PROXY` / `HTTPS_PROXY`，不代表 Docker 后台服务也使用代理。`docker login`、`docker push` 需要后台服务能访问 Docker Hub；Buildx 和 `docker manifest` 的远程查询则使用客户端网络，脚本会让这些查询由当前用户执行，保留终端代理和同一个临时 Docker 凭证目录。
+
+先在 WSL 中验证代理可用；下面以 `http://127.0.0.1:7897` 为例，`/v2/` 返回 HTTP 401 表示已连通，尚未提供登录凭证：
+
+```bash
+curl --proxy http://127.0.0.1:7897 --noproxy '' --connect-timeout 5 --max-time 15 \
+  -sS -o /dev/null -w '%{http_code}\n' https://registry-1.docker.io/v2/
+```
+
+对于独立安装的 Docker Engine 23 或更新版本，将以下配置合并到 `/etc/docker/daemon.json`，保留文件中的其他设置。`127.0.0.1` 只适用于已验证 WSL 能访问该端口的环境，否则应填写 WSL 可达的代理地址。
+
+```json
+{
+  "proxies": {
+    "http-proxy": "http://127.0.0.1:7897",
+    "https-proxy": "http://127.0.0.1:7897",
+    "no-proxy": "localhost,127.0.0.1,::1"
+  }
+}
+```
+
+确认可以重启 Docker（重启可能中断运行中的容器）后，校验配置并重启服务：
+
+```bash
+sudo dockerd --validate --config-file /etc/docker/daemon.json
+sudo systemctl restart docker
+sudo docker info | grep -i proxy
+```
+
+终端也需保留可用的 `HTTP_PROXY` / `HTTPS_PROXY`。Docker Desktop 用户应在其代理设置中配置，Desktop 会忽略 `daemon.json` 中的代理设置，详见 [Docker 后台服务代理文档](https://docs.docker.com/engine/daemon/proxy/)。恢复连接后直接重跑脚本，保留已构建镜像和 Docker 构建缓存；Buildx 会复用已完成层，登录时重新输入 Token 即可。
+
 ## 获取代码
 
 ```bash
@@ -215,5 +248,6 @@ cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth
 - 构建停在 gsplat 的 `git submodule update --init --recursive`：旧构建会按上游 `.gitmodules` 直连 GitHub 拉取 GLM；新版只在该构建命令内把子模块 URL 改写到 `v4.gh-proxy.org`，并在连接持续低速 30 秒后明确失败。更新代码后重跑，前面的 PyTorch3D 层仍可复用缓存。
 - CUDA 扩展编译失败：保留首次失败日志；修复网络或资源问题后直接重跑，Buildx 会复用已完成层。
 - Docker Hub 登录失败：填写 Docker ID 和有效的 Access Token；推送需要 Read & Write 权限，组织仓库还需要该账号具备仓库写权限。
+- Docker Hub 登录或推送报 `Client.Timeout exceeded while awaiting headers`：检查 Docker 后台服务代理，终端能联网或基础镜像构建成功不能证明 Docker Hub 发布链路可用，参见上方“WSL2 / Linux 使用网络代理”。
 - Docker Hub 推送或查询 Manifest 失败：确认目标仓库已创建，并检查 `auth.docker.io`、`registry-1.docker.io` 的连通性和账号权限；不能把无权限当作远程 tag 不存在。
 - Manifest 校验失败：远程镜像必须且只能包含 `linux/amd64`。

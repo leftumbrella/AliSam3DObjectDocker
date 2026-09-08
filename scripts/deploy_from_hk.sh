@@ -284,9 +284,14 @@ configure_docker_repository() {
 }
 
 run_docker() {
-  local status
+  local status client_only=0
   [[ "$DOCKER_READY" -eq 1 ]] || die 'Docker 命令适配器尚未初始化'
-  if [[ "$DOCKER_USE_SUDO" -eq 1 ]]; then
+  # Registry queries do not use the daemon socket. Keep the caller's proxy
+  # environment and the same temporary credentials instead of invoking sudo.
+  case "${1:-}:${2:-}:${3:-}" in
+    buildx:imagetools:inspect|manifest:inspect:*) client_only=1 ;;
+  esac
+  if [[ "$DOCKER_USE_SUDO" -eq 1 && "$client_only" -eq 0 ]]; then
     if run_privileged env "DOCKER_CONFIG=$DOCKER_CONFIG" docker "$@"; then
       status=0
     else

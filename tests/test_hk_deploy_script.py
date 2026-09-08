@@ -232,6 +232,54 @@ printf 'CACHE_CLEARED\n'
         self.assertEqual(result.stdout.strip(), "LOGIN_OK\nCACHE_CLEARED")
         self.assertNotIn("dummy-test-token", result.stdout + result.stderr)
 
+    def test_registry_queries_keep_proxy_without_daemon_privileges(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            docker = Path(directory) / "docker"
+            docker.write_text(
+                '#!/usr/bin/env bash\n'
+                'printf "%s\\n" "${HTTPS_PROXY:-missing}" "$DOCKER_CONFIG" "$@"\n'
+                'exit "${DOCKER_TEST_STATUS:-0}"\n',
+                encoding="utf-8",
+            )
+            docker.chmod(0o755)
+            env = os.environ.copy()
+            env["HTTPS_PROXY"] = "http://proxy.example:3128"
+            image = "docker.io/example/sam3d:test"
+            cases = (
+                (["buildx", "imagetools", "inspect", "--raw", image], env["HTTPS_PROXY"]),
+                (["manifest", "inspect", "--verbose", image], env["HTTPS_PROXY"]),
+                (["push", image], "missing"),
+            )
+            for args, expected_proxy in cases:
+                for status in (0, 9):
+                    with self.subTest(args=args, status=status):
+                        env["DOCKER_TEST_STATUS"] = str(status)
+                        result = subprocess.run(
+                            ["bash", "-c", """
+source "$1"
+export PATH="$2:$PATH"
+ensure_temp_dir
+DOCKER_READY=1
+DOCKER_USE_SUDO=1
+run_privileged() {
+  if [[ "$1" == env ]]; then
+    env -u HTTPS_PROXY "$@"
+  fi
+}
+shift 2
+run_docker "$@"
+""", "bash", str(SCRIPT), directory, *args],
+                            cwd=ROOT, env=env, text=True, capture_output=True,
+                            check=False, timeout=5,
+                        )
+                        self.assertEqual(result.returncode, status, result.stderr)
+                        output = result.stdout.splitlines()
+                        self.assertEqual(output[0], expected_proxy)
+                        self.assertRegex(
+                            output[1], r"^/tmp/sam3d-dockerhub-push\.[^/]+/docker-config$"
+                        )
+                        self.assertEqual(output[2:], args)
+
     def test_non_root_execution_keeps_host_tooling_isolated(self) -> None:
         self.assertIn('TRANSFER_ROOT="$user_home/sam3d-transfer"', self.script)
         self.assertIn('sudo -- "$@"', self.script)
