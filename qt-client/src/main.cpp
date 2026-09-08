@@ -80,7 +80,9 @@ int main(int argc, char *argv[])
         QTimer::singleShot(900, &window, [&window, screenshotPath] {
             QFileInfo outputInfo(screenshotPath);
             QDir().mkpath(outputInfo.absolutePath());
-            const QImage image = window.grab().toImage();
+            // Save logical pixels so the reference size is stable at 100%, 150% and 200% DPI.
+            const QImage image = window.grab().toImage().scaled(window.size(), Qt::IgnoreAspectRatio,
+                                                               Qt::SmoothTransformation);
             const bool saved = image.save(outputInfo.absoluteFilePath());
             QCoreApplication::exit(saved ? 0 : 2);
         });

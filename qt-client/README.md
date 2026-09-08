@@ -40,3 +40,7 @@ SAM3DQtClient.exe --state=result --screenshot=result.png
 ```
 
 支持的状态为 `waiting`、`selected`、`confirm`、`generating`、`failed`、`result`、`saved`。
+
+界面按设计图统一中文字体、悬浮工具栏、选区描边、蓝色渐变按钮和各状态弹窗；确认框展示实际转换信息，尚未接入积分计费。截图按窗口的逻辑像素输出，在 Windows 150% 等缩放下仍为 1280 × 800。
+
+`--state` 是只用于视觉校验的预览：选区来自设计参考，3D 区域使用程序生成的示例网格，不调用分割或生成服务。点击“选择图片”或使用 `--image` 后退出预览，恢复真实的图片、Mask 和 GLB 工作流。真实生成期间进度条不显示虚构百分比。

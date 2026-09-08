@@ -41,14 +41,14 @@
 namespace Theme {
 
 const QColor canvas(7, 13, 25);
-const QColor surface(14, 21, 36);
-const QColor surfaceRaised(22, 31, 50);
-const QColor surfaceSoft(38, 48, 69);
-const QColor border(57, 70, 94);
-const QColor text(240, 244, 251);
-const QColor secondary(171, 181, 200);
+const QColor surface(16, 20, 33);
+const QColor surfaceRaised(37, 41, 56);
+const QColor surfaceSoft(37, 41, 56);
+const QColor border(65, 73, 93);
+const QColor text(231, 237, 250);
+const QColor secondary(162, 173, 194);
 const QColor muted(111, 125, 148);
-const QColor primary(42, 104, 255);
+const QColor primary(47, 96, 218);
 const QColor mask(235, 58, 67);
 const QColor success(53, 203, 142);
 const QColor warning(255, 179, 71);
@@ -85,12 +85,13 @@ enum class IconKind {
     Trash,
     Undo,
     Download,
-    Fullscreen
+    Fullscreen,
+    Sparkles, Capture, Progress, Error, Credit, Check
 };
 
 QIcon makeIcon(IconKind kind, const QColor &color = Theme::text)
 {
-    constexpr int logicalSize = 36;
+    constexpr int logicalSize = 24;
     constexpr qreal ratio = 2.0;
     QPixmap pixmap(logicalSize * int(ratio), logicalSize * int(ratio));
     pixmap.setDevicePixelRatio(ratio);
@@ -103,6 +104,46 @@ QIcon makeIcon(IconKind kind, const QColor &color = Theme::text)
     painter.translate(logicalSize / 2.0, logicalSize / 2.0);
 
     switch (kind) {
+    case IconKind::Sparkles: {
+        QPainterPath star;
+        star.moveTo(-2, -10);
+        star.lineTo(0, -3); star.lineTo(7, -1); star.lineTo(0, 1);
+        star.lineTo(-2, 8); star.lineTo(-4, 1); star.lineTo(-10, -1);
+        star.lineTo(-4, -3); star.closeSubpath();
+        painter.drawPath(star);
+        painter.drawLine(QPointF(7, 6), QPointF(7, 10));
+        painter.drawLine(QPointF(5, 8), QPointF(9, 8));
+        break;
+    }
+    case IconKind::Capture:
+        for (int i = 0; i < 3; ++i) {
+            painter.save();
+            painter.rotate(i * 120.0);
+            painter.setPen(QPen(QColor(i == 0 ? "#ef8750" : i == 1 ? "#27c3ad" : "#578bfa"), 1.8));
+            painter.drawEllipse(QRectF(-7, -5, 14, 11));
+            painter.restore();
+        }
+        break;
+    case IconKind::Progress:
+        painter.setPen(QPen(QColor(65, 73, 93), 2.4));
+        painter.drawEllipse(QPointF(0, 0), 8, 8);
+        painter.setPen(QPen(color, 2.4, Qt::SolidLine, Qt::RoundCap));
+        painter.drawArc(QRectF(-8, -8, 16, 16), 90 * 16, -280 * 16);
+        break;
+    case IconKind::Error:
+    case IconKind::Credit:
+        painter.drawEllipse(QPointF(0, 0), 9, 9);
+        painter.drawLine(QPointF(0, -4), QPointF(0, 2));
+        if (kind == IconKind::Error)
+            painter.drawPoint(QPointF(0, 5));
+        else {
+            painter.drawLine(QPointF(-4, -1), QPointF(4, -1));
+            painter.drawLine(QPointF(0, 2), QPointF(0, 5));
+        }
+        break;
+    case IconKind::Check:
+        painter.drawPolyline(QPolygonF() << QPointF(-7, 0) << QPointF(-2, 5) << QPointF(7, -5));
+        break;
     case IconKind::Back:
         painter.drawLine(QPointF(6, -8), QPointF(-3, 0));
         painter.drawLine(QPointF(-3, 0), QPointF(6, 8));
@@ -277,7 +318,7 @@ public:
         setChecked(true);
         setCursor(Qt::PointingHandCursor);
         setFocusPolicy(Qt::StrongFocus);
-        setFixedSize(46, 26);
+        setFixedSize(48, 40);
         setAccessibleName(QStringLiteral("AI 捕捉微生物"));
         setToolTip(QStringLiteral("开启或关闭 AI 捕捉"));
     }
@@ -294,16 +335,16 @@ protected:
         if (isDown())
             track = track.darker(115);
 
-        const QRectF trackRect(1, 2, width() - 2, height() - 4);
+        const QRectF trackRect(1, 7, width() - 2, 26);
         painter.setPen(QPen(hasFocus() ? QColor(126, 165, 255) : QColor(89, 104, 132), 1));
         painter.setBrush(track);
         painter.drawRoundedRect(trackRect, trackRect.height() / 2, trackRect.height() / 2);
 
-        const qreal diameter = 18;
+        const qreal diameter = 22;
         const qreal x = isChecked() ? width() - diameter - 4 : 4;
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(247, 250, 255));
-        painter.drawEllipse(QRectF(x, 4, diameter, diameter));
+        painter.drawEllipse(QRectF(x, 9, diameter, diameter));
     }
 
     void enterEvent(QEvent *event) override
@@ -362,8 +403,14 @@ public:
                 const int gray = qGray(input[x]);
                 const int sourceAlpha = qAlpha(input[x]);
                 const int coverage = sourceAlpha < 255 ? qMax(gray, sourceAlpha) : gray;
+                const bool edge = coverage > 127 && (
+                    x == 0 || y == 0 || x == source.width() - 1 || y == source.height() - 1
+                    || qGray(source.pixel(x - 1, y)) <= 127
+                    || qGray(source.pixel(x + 1, y)) <= 127
+                    || qGray(source.pixel(x, y - 1)) <= 127
+                    || qGray(source.pixel(x, y + 1)) <= 127);
                 output[x] = qPremultiply(
-                    qRgba(235, 46, 55, qRound(coverage * 0.62)));
+                    qRgba(235, 46, 55, edge ? 245 : qRound(coverage * 0.62)));
             }
         }
         update();
@@ -424,6 +471,7 @@ public:
 
     void clearSelections(bool notify = true)
     {
+        m_demoSelections = false;
         m_marks.clear();
         clearMask();
         update();
@@ -443,6 +491,7 @@ public:
 
     void setDemoSelections(bool enabled)
     {
+        m_demoSelections = enabled;
         m_marks.clear();
         if (enabled && !m_image.isNull()) {
             m_marks.append({QPointF(m_image.width() * 0.275,
@@ -478,6 +527,8 @@ protected:
 
         painter.fillRect(rect(), QColor(4, 9, 18, 22));
 
+        if (m_demoSelections)
+            return;
         for (const SelectionMark &mark : m_marks) {
             const QPointF center = imageToTarget(mark.imagePoint);
             const QColor accent = mark.positive ? Theme::primary : Theme::mask;
@@ -591,6 +642,7 @@ private:
     QVector<SelectionMark> m_marks;
     bool m_split = false;
     bool m_fitWholeImage = false;
+    bool m_demoSelections = false;
     bool m_addMode = true;
     bool m_interactive = true;
     bool m_pressed = false;
@@ -665,18 +717,6 @@ protected:
         glColor3f(0.145f, 0.185f, 0.205f); glVertex2f(1.0f, 1.0f);
         glColor3f(0.105f, 0.145f, 0.165f); glVertex2f(0.0f, 1.0f);
         glEnd();
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glColor4f(0.35f, 0.48f, 0.55f, 0.14f);
-        glBegin(GL_LINES);
-        for (int index = 0; index <= 12; ++index) {
-            const float value = index / 12.0f;
-            glVertex2f(value, 0.0f); glVertex2f(value, 0.38f);
-            glVertex2f(0.0f, value * 0.38f); glVertex2f(1.0f, value * 0.38f);
-        }
-        glEnd();
-        glDisable(GL_BLEND);
 
         if (!m_model || m_model->isEmpty())
             return;
@@ -818,6 +858,7 @@ EditorCanvas::EditorCanvas(QWidget *parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(1180, 720);
+    setFont(Theme::font(13));
     setAcceptDrops(true);
 
     m_sourceImage.load(QStringLiteral(":/design/sample-microbe.png"));
@@ -887,7 +928,8 @@ EditorCanvas::EditorCanvas(QWidget *parent)
             applyState(false);
             showToast(QStringLiteral("选区计算失败"), message, false);
         } else if (operation == Sam3dClient::Operation::Generation) {
-            m_failedBody->setText(message);
+            m_failedBody->setText(QStringLiteral("生成未能完成，请检查网络或服务后重试"));
+            m_failedBody->setToolTip(message);
             setState(UiState::Failed);
         }
     });
@@ -899,7 +941,10 @@ EditorCanvas::EditorCanvas(QWidget *parent)
     });
 
     applyState(false);
-    QTimer::singleShot(0, m_client, [this] { m_client->checkReady(); });
+    QTimer::singleShot(0, m_client, [this] {
+        if (!m_demoStateLocked)
+            m_client->checkReady();
+    });
 }
 
 EditorCanvas::~EditorCanvas() = default;
@@ -921,48 +966,53 @@ QUrl EditorCanvas::serviceEndpoint() const
 void EditorCanvas::buildInterface()
 {
     setStyleSheet(QStringLiteral(R"STYLE(
+        QWidget { font-family: "Microsoft YaHei UI"; font-size: 13px; }
         QWidget#EditorRoot {
             background: #070d19;
-            color: #f0f4fb;
-            font-family: "Microsoft YaHei UI", "Segoe UI";
+            color: #e7edfa;
+            font-family: "Microsoft YaHei UI";
             font-size: 13px;
         }
         QFrame#TopBar, QFrame#StatusBar, QFrame#ToolPanel, QFrame#AiPanel {
-            background: #0e1524;
-            border: 1px solid #39465e;
+            background: #101421;
+            border: 1px solid #41495d;
         }
-        QFrame#TopBar { border-radius: 20px; }
-        QFrame#StatusBar { border-radius: 14px; }
+        QFrame#TopBar { border-radius: 18px; }
+        QFrame#StatusBar { border: none; border-radius: 16px; }
         QFrame#ToolPanel, QFrame#AiPanel { border-radius: 15px; }
-        QLabel { color: #f0f4fb; background: transparent; border: none; }
+        QLabel { color: #e7edfa; background: transparent; border: none; }
         QLabel#SecondaryLabel { color: #aab5c8; }
         QLabel#MutedLabel { color: #77849c; }
         QLabel#StatusIcon { color: #3f7cff; font-size: 20px; }
-        QLabel#TitleLabel { font-size: 15px; font-weight: 600; }
+        QLabel#TitleLabel { font-size: 16px; font-weight: 600; }
+        QLabel#SelectionStatus { color: #e7edfa; font-size: 16px; }
+        QFrame#StatusBar QPushButton { font-size: 16px; }
 
         QPushButton {
             min-height: 38px;
             padding: 0 16px;
-            color: #dbe3f1;
-            background: #202a3c;
-            border: 1px solid #3b4861;
+            color: #e7edfa;
+            background: #252938;
+            border: 1px solid #41495d;
             border-radius: 10px;
-            font-weight: 500;
+            font-weight: 400;
         }
         QPushButton:hover { background: #2a3650; border-color: #52617d; color: #ffffff; }
         QPushButton:pressed { background: #182236; padding-top: 2px; padding-left: 17px; }
         QPushButton:focus { border: 1px solid #7da5ff; }
-        QPushButton:disabled { background: #111827; border-color: #293348; color: #65718a; }
+        QPushButton:disabled { background: #202431; border-color: #303747; color: #778399; }
         QPushButton#GhostButton { background: transparent; border: none; color: #d8e0ef; padding: 0 8px; }
         QPushButton#GhostButton:hover { background: #1c2639; }
-        QPushButton#ExitButton { background: #252f43; border-color: #252f43; color: #d0d8e6; }
+        QPushButton#ExitButton { background: #252938; border: none; border-radius: 20px; color: #e7edfa; }
         QPushButton#ExitButton:hover { background: #303b52; }
-        QPushButton#PrimaryButton { background: #235cf0; border-color: #2f6cff; color: #ffffff; font-weight: 600; }
+        QPushButton#PrimaryButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3062db, stop:1 #0936dc); border: none; color: #f1f5ff; }
         QPushButton#PrimaryButton:hover { background: #3472ff; border-color: #6091ff; }
         QPushButton#PrimaryButton:pressed { background: #1848c8; }
-        QPushButton#PrimaryButton:disabled { background: #10182b; border-color: #27324a; color: #687692; }
-        QPushButton#AddButton:checked { background: #235cf0; border-color: #3977ff; color: #ffffff; }
-        QPushButton#SubtractButton:checked { background: #eb3a43; border-color: #ff5159; color: #ffffff; }
+        QPushButton#PrimaryButton:disabled { background: #090c15; border: 1px solid #282f40; color: #66728a; }
+        QPushButton#AddButton:checked { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3062db, stop:1 #0936dc); border: none; color: #f1f5ff; }
+        QPushButton#SubtractButton:checked { background: #ef3333; border: none; color: #fff3f3; }
+        QPushButton#OpenImageButton { background: #252938; }
+        QPushButton#ModalButton { border-radius: 14px; }
         QPushButton#FloatingButton { background: rgba(9, 17, 31, 235); border-color: #344159; color: #dce4f2; }
         QPushButton#FloatingButton:hover { background: #1b2a40; border-color: #536582; }
 
@@ -970,51 +1020,51 @@ void EditorCanvas::buildInterface()
             width: 42px;
             height: 42px;
             padding: 0;
-            background: #202a3c;
-            border: 1px solid #3a4860;
+            background: #252938;
+            border: 1px solid #41495d;
             border-radius: 10px;
         }
         QToolButton:hover { background: #2b3851; border-color: #566784; }
         QToolButton:pressed { background: #172238; padding-top: 2px; }
-        QToolButton:checked { background: #173764; border-color: #2f72ff; }
+        QToolButton:checked { background: #252938; border-color: #536584; }
         QToolButton:focus { border-color: #7da5ff; }
 
-        QWidget#ModalShade { background: rgba(4, 9, 18, 150); }
+        QWidget#ModalShade { background: rgba(4, 9, 18, 70); }
         QFrame#ModalPage {
-            background: #0f1627;
-            border: 1px solid #46536b;
+            background: #101421;
+            border: 1px solid #41495d;
             border-radius: 20px;
         }
         QFrame#CreditPanel {
-            background: #242d40;
-            border: 1px solid #46536b;
+            background: #252938;
+            border: 1px solid #41495d;
             border-radius: 12px;
         }
-        QLabel#ModalIconBlue, QLabel#ModalIconRed {
-            border-radius: 24px;
+        QLabel#ModalIconBlue, QLabel#ModalIconRed, QLabel#ModalIconProgress {
+            border-radius: 32px;
             font-size: 26px;
             font-weight: 600;
         }
-        QLabel#ModalIconBlue { background: #2b65e8; color: #ffffff; }
-        QLabel#ModalIconRed { background: #252e42; border: 1px solid #46536b; color: #ff4a52; }
-        QLabel#ModalTitle { font-size: 21px; font-weight: 650; }
+        QLabel#ModalIconBlue { background: #2f60da; border-radius: 24px; }
+        QLabel#ModalIconRed, QLabel#ModalIconProgress { background: #252938; border: 1px solid #41495d; }
+        QLabel#ModalTitle { font-size: 21px; font-weight: 600; }
         QLabel#ModalBody { color: #a3aec2; font-size: 13px; }
         QProgressBar {
             height: 8px;
-            background: #2a3346;
+            background: #252938;
             border: none;
             border-radius: 4px;
         }
-        QProgressBar::chunk { background: #3777ff; border-radius: 4px; }
+        QProgressBar::chunk { background: #2f60da; border-radius: 4px; }
 
         QFrame#Toast {
-            background: #11192a;
-            border: 1px solid #45536d;
+            background: #101421;
+            border: 1px solid #41495d;
             border-radius: 14px;
         }
         QLabel#ToastIcon {
-            background: #233047;
-            border: 1px solid #465775;
+            background: #252938;
+            border: 1px solid #41495d;
             border-radius: 18px;
             color: #49d29b;
             font-size: 20px;
@@ -1075,6 +1125,7 @@ QToolButton *EditorCanvas::createToolButton(const QString &tooltip,
     auto *button = new QToolButton(parent);
     button->setIcon(icon);
     button->setIconSize(QSize(24, 24));
+    button->setFixedSize(44, 44);
     button->setToolTip(tooltip);
     button->setAccessibleName(tooltip);
     button->setCursor(Qt::PointingHandCursor);
@@ -1102,12 +1153,13 @@ void EditorCanvas::buildTopBar()
     m_titleLabel = new QLabel(m_topBar);
     m_titleLabel->setObjectName(QStringLiteral("TitleLabel"));
     m_titleLabel->setTextInteractionFlags(Qt::NoTextInteraction);
+    m_titleLabel->setTextFormat(Qt::PlainText);
 
     m_exitButton = createTextButton(QStringLiteral("退出编辑模式"), QStringLiteral("ExitButton"), m_topBar);
     connect(m_exitButton, &QPushButton::clicked, this, &QWidget::close);
 
-    m_saveButton = createTextButton(QStringLiteral("保存"), QStringLiteral("PrimaryButton"),
-                                    m_topBar, makeIcon(IconKind::Save));
+    m_saveButton = createTextButton(QStringLiteral("保存"), QStringLiteral("PrimaryButton"), m_topBar);
+    m_saveButton->setStyleSheet(QStringLiteral("border-radius: 14px;"));
     m_saveButton->setShortcut(QKeySequence::Save);
     m_saveButton->setToolTip(QStringLiteral("保存 3D 模型 (Ctrl+S)"));
     connect(m_saveButton, &QPushButton::clicked, this, [this] {
@@ -1129,12 +1181,14 @@ void EditorCanvas::buildStatusBar()
     m_statusBar->setObjectName(QStringLiteral("StatusBar"));
     m_statusBar->setAttribute(Qt::WA_StyledBackground, true);
 
-    m_statusIcon = new QLabel(QStringLiteral("✦"), m_statusBar);
+    m_statusIcon = new QLabel(m_statusBar);
+    m_statusIcon->setPixmap(makeIcon(IconKind::Sparkles, Theme::primary).pixmap(QSize(22, 22)));
     m_statusIcon->setObjectName(QStringLiteral("StatusIcon"));
     m_statusIcon->setAlignment(Qt::AlignCenter);
 
     m_statusLabel = new QLabel(m_statusBar);
-    m_statusLabel->setObjectName(QStringLiteral("SecondaryLabel"));
+    m_statusLabel->setObjectName(QStringLiteral("SelectionStatus"));
+    m_statusLabel->setToolTip(QStringLiteral("左键增加选区，右键减少选区"));
 
     m_addButton = createTextButton(QStringLiteral("＋ 增加选区"), QStringLiteral("AddButton"), m_statusBar);
     m_addButton->setCheckable(true);
@@ -1173,8 +1227,8 @@ void EditorCanvas::buildToolBars()
     m_leftTools->setObjectName(QStringLiteral("ToolPanel"));
     m_leftTools->setAttribute(Qt::WA_StyledBackground, true);
     auto *leftLayout = new QHBoxLayout(m_leftTools);
-    leftLayout->setContentsMargins(7, 7, 7, 7);
-    leftLayout->setSpacing(5);
+    leftLayout->setContentsMargins(8, 8, 8, 8);
+    leftLayout->setSpacing(8);
 
     const QVector<QPair<QString, IconKind>> leftDefinitions = {
         {QStringLiteral("导入显微图像 (Ctrl+O)"), IconKind::Image},
@@ -1194,12 +1248,12 @@ void EditorCanvas::buildToolBars()
     m_centerTools->setObjectName(QStringLiteral("ToolPanel"));
     m_centerTools->setAttribute(Qt::WA_StyledBackground, true);
     auto *centerLayout = new QHBoxLayout(m_centerTools);
-    centerLayout->setContentsMargins(7, 7, 7, 7);
-    centerLayout->setSpacing(5);
+    centerLayout->setContentsMargins(8, 8, 8, 8);
+    centerLayout->setSpacing(8);
 
     const QVector<QPair<QString, IconKind>> centerDefinitions = {
-        {QStringLiteral("智能捕捉"), IconKind::Target},
-        {QStringLiteral("选择工具"), IconKind::Cursor},
+        {QStringLiteral("智能捕捉"), IconKind::Capture},
+        {QStringLiteral("选择工具"), IconKind::Target},
         {QStringLiteral("线段工具"), IconKind::Line},
         {QStringLiteral("圆形笔刷"), IconKind::Circle},
         {QStringLiteral("自由套索"), IconKind::Lasso},
@@ -1238,11 +1292,13 @@ void EditorCanvas::buildToolBars()
     m_aiTools = new QFrame(this);
     m_aiTools->setObjectName(QStringLiteral("AiPanel"));
     m_aiTools->setAttribute(Qt::WA_StyledBackground, true);
-    m_aiLabel = new QLabel(QStringLiteral("✦  AI 捕捉微生物"), m_aiTools);
-    m_aiLabel->setObjectName(QStringLiteral("SecondaryLabel"));
+    auto *aiIcon = new QLabel(m_aiTools);
+    aiIcon->setPixmap(makeIcon(IconKind::Sparkles, Theme::primary).pixmap(QSize(22, 22)));
+    aiIcon->setGeometry(18, 19, 22, 22);
+    m_aiLabel = new QLabel(QStringLiteral("AI 捕捉微生物"), m_aiTools);
     m_aiSwitch = new ToggleSwitch(m_aiTools);
     connect(m_aiSwitch, &QAbstractButton::toggled, this, [this](bool enabled) {
-        m_statusIcon->setText(enabled ? QStringLiteral("✦") : QStringLiteral("◌"));
+        m_statusIcon->setPixmap(makeIcon(IconKind::Sparkles, enabled ? Theme::primary : Theme::muted).pixmap(QSize(22, 22)));
         m_imageView->setInteractive(enabled && m_state != UiState::Generating);
         if (!enabled) {
             m_segmentQueued = false;
@@ -1284,27 +1340,28 @@ void EditorCanvas::buildModal()
     };
 
     QFrame *confirmPage = makePage();
-    QLabel *confirmIcon = makeLabel(QStringLiteral("◎"), QStringLiteral("ModalIconBlue"), confirmPage);
+    QLabel *confirmIcon = makeLabel(QString(), QStringLiteral("ModalIconBlue"), confirmPage);
+    confirmIcon->setPixmap(makeIcon(IconKind::Credit).pixmap(QSize(22, 22)));
     confirmIcon->setAlignment(Qt::AlignCenter);
     confirmIcon->setGeometry(32, 27, 48, 48);
-    QLabel *confirmTitle = makeLabel(QStringLiteral("确认生成 GLB 模型"), QStringLiteral("ModalTitle"), confirmPage);
+    QLabel *confirmTitle = makeLabel(QStringLiteral("确认生成 3D 模型"), QStringLiteral("ModalTitle"), confirmPage);
     confirmTitle->setGeometry(96, 24, 330, 32);
-    QLabel *confirmSubtitle = makeLabel(QStringLiteral("将调用函数计算执行 SAM3D 重建"), QStringLiteral("ModalBody"), confirmPage);
+    QLabel *confirmSubtitle = makeLabel(QStringLiteral("将当前选区转换为可保存的 3D 模型"), QStringLiteral("ModalBody"), confirmPage);
     confirmSubtitle->setGeometry(96, 57, 300, 24);
 
     QFrame *creditPanel = new QFrame(confirmPage);
     creditPanel->setObjectName(QStringLiteral("CreditPanel"));
     creditPanel->setAttribute(Qt::WA_StyledBackground, true);
     creditPanel->setGeometry(32, 103, 436, 48);
-    QLabel *creditCurrent = makeLabel(QStringLiteral("输出 GLB 2.0"), QStringLiteral("ModalBody"), creditPanel);
+    QLabel *creditCurrent = makeLabel(QStringLiteral("选区已就绪"), QStringLiteral("ModalBody"), creditPanel);
     creditCurrent->setGeometry(20, 0, 105, 48);
-    QLabel *creditCost = makeLabel(QStringLiteral("种子 42"), QStringLiteral("ModalBody"), creditPanel);
+    QLabel *creditCost = makeLabel(QStringLiteral("保留原图"), QStringLiteral("ModalBody"), creditPanel);
     creditCost->setGeometry(158, 0, 105, 48);
-    QLabel *creditAfter = makeLabel(QStringLiteral("Mask 已就绪"), QStringLiteral("ModalBody"), creditPanel);
+    QLabel *creditAfter = makeLabel(QStringLiteral("可导出 GLB"), QStringLiteral("ModalBody"), creditPanel);
     creditAfter->setStyleSheet(QStringLiteral("color: #4f83ff;"));
     creditAfter->setGeometry(296, 0, 120, 48);
 
-    QLabel *confirmNote = makeLabel(QStringLiteral("确认后上传原图与当前 Mask，生成期间请保持程序运行。"),
+    QLabel *confirmNote = makeLabel(QStringLiteral("确认后开始生成，生成期间请保持程序运行。"),
                                     QStringLiteral("ModalBody"), confirmPage);
     confirmNote->setGeometry(32, 163, 430, 28);
     QPushButton *confirmCancel = createTextButton(QStringLiteral("取消"), QStringLiteral("ModalButton"), confirmPage);
@@ -1315,47 +1372,48 @@ void EditorCanvas::buildModal()
         setState(m_imageView->selectionCount() > 0 ? UiState::Selected : UiState::Waiting);
     });
     connect(confirmAccept, &QPushButton::clicked, this, [this] {
-        m_demoStateLocked = false;
         beginGeneration();
     });
 
     QFrame *generatingPage = makePage();
-    QLabel *generatingIcon = makeLabel(QStringLiteral("◔"), QStringLiteral("ModalIconBlue"), generatingPage);
+    QLabel *generatingIcon = makeLabel(QString(), QStringLiteral("ModalIconProgress"), generatingPage);
+    generatingIcon->setPixmap(makeIcon(IconKind::Progress, Theme::primary).pixmap(QSize(30, 30)));
     generatingIcon->setAlignment(Qt::AlignCenter);
-    generatingIcon->setGeometry(226, 28, 48, 48);
+    generatingIcon->setGeometry(198, 28, 64, 64);
     QLabel *generatingTitle = makeLabel(QStringLiteral("正在生成 3D 模型"), QStringLiteral("ModalTitle"), generatingPage);
     generatingTitle->setAlignment(Qt::AlignCenter);
-    generatingTitle->setGeometry(80, 94, 340, 34);
+    generatingTitle->setGeometry(60, 106, 340, 34);
     QLabel *generatingBody = makeLabel(QStringLiteral("正在重建微生物的细节与深度信息"), QStringLiteral("ModalBody"), generatingPage);
     generatingBody->setAlignment(Qt::AlignCenter);
-    generatingBody->setGeometry(70, 135, 360, 26);
+    generatingBody->setGeometry(50, 151, 360, 26);
     m_generationProgress = new QProgressBar(generatingPage);
     m_generationProgress->setTextVisible(false);
     m_generationProgress->setRange(0, 0);
-    m_generationProgress->setGeometry(88, 181, 324, 8);
-    QLabel *generatingNote = makeLabel(QStringLiteral("函数计算正在推理，请勿关闭程序"), QStringLiteral("ModalBody"), generatingPage);
+    m_generationProgress->setGeometry(70, 188, 320, 8);
+    QLabel *generatingNote = makeLabel(QStringLiteral("正在生成，请勿关闭程序"), QStringLiteral("ModalBody"), generatingPage);
     generatingNote->setAlignment(Qt::AlignCenter);
-    generatingNote->setGeometry(100, 205, 300, 26);
+    generatingNote->setGeometry(80, 207, 300, 26);
 
     QFrame *failedPage = makePage();
-    QLabel *failedIcon = makeLabel(QStringLiteral("!"), QStringLiteral("ModalIconRed"), failedPage);
+    QLabel *failedIcon = makeLabel(QString(), QStringLiteral("ModalIconRed"), failedPage);
+    failedIcon->setPixmap(makeIcon(IconKind::Error, QColor("#ef3333")).pixmap(QSize(32, 32)));
     failedIcon->setAlignment(Qt::AlignCenter);
-    failedIcon->setGeometry(226, 28, 48, 48);
+    failedIcon->setGeometry(208, 28, 64, 64);
     QLabel *failedTitle = makeLabel(QStringLiteral("3D 模型生成失败"), QStringLiteral("ModalTitle"), failedPage);
     failedTitle->setAlignment(Qt::AlignCenter);
-    failedTitle->setGeometry(75, 94, 350, 34);
+    failedTitle->setGeometry(65, 106, 350, 34);
     m_failedBody = makeLabel(QStringLiteral("生成过程未能完成，请检查网络后重新尝试"), QStringLiteral("ModalBody"), failedPage);
     m_failedBody->setAlignment(Qt::AlignCenter);
-    m_failedBody->setGeometry(60, 136, 380, 28);
+    m_failedBody->setGeometry(40, 148, 400, 34);
+    m_failedBody->setWordWrap(true);
     QPushButton *failedBack = createTextButton(QStringLiteral("返回编辑"), QStringLiteral("ModalButton"), failedPage);
-    failedBack->setGeometry(124, 186, 120, 44);
+    failedBack->setGeometry(114, 188, 120, 44);
     QPushButton *failedRetry = createTextButton(QStringLiteral("重新生成"), QStringLiteral("PrimaryButton"), failedPage);
-    failedRetry->setGeometry(256, 186, 120, 44);
+    failedRetry->setGeometry(246, 188, 120, 44);
     connect(failedBack, &QPushButton::clicked, this, [this] {
         setState(m_imageView->selectionCount() > 0 ? UiState::Selected : UiState::Waiting);
     });
     connect(failedRetry, &QPushButton::clicked, this, [this] {
-        m_demoStateLocked = false;
         beginGeneration();
     });
 
@@ -1378,7 +1436,8 @@ void EditorCanvas::buildToast()
     m_toast->setObjectName(QStringLiteral("Toast"));
     m_toast->setAttribute(Qt::WA_StyledBackground, true);
 
-    QLabel *toastIcon = new QLabel(QStringLiteral("✓"), m_toast);
+    QLabel *toastIcon = new QLabel(m_toast);
+    toastIcon->setPixmap(makeIcon(IconKind::Check, Theme::success).pixmap(QSize(20, 20)));
     toastIcon->setObjectName(QStringLiteral("ToastIcon"));
     toastIcon->setAlignment(Qt::AlignCenter);
     toastIcon->setGeometry(16, 14, 36, 36);
@@ -1387,6 +1446,8 @@ void EditorCanvas::buildToast()
     m_toastTitle->setObjectName(QStringLiteral("ToastTitle"));
     m_toastDetail = new QLabel(m_toast);
     m_toastDetail->setObjectName(QStringLiteral("ToastDetail"));
+    m_toastDetail->setTextFormat(Qt::PlainText);
+    m_toastDetail->setWordWrap(true);
     m_toastAction = createTextButton(QStringLiteral("点击查看"), QStringLiteral("PrimaryButton"), m_toast);
     m_toastAction->setGeometry(260, 12, 88, 40);
     connect(m_toastAction, &QPushButton::clicked, this, [this] {
@@ -1413,37 +1474,47 @@ void EditorCanvas::layoutInterface()
 
     m_topBar->setGeometry(40, 28, canvasWidth - 80, 64);
     m_backButton->setGeometry(12, 10, 102, 44);
-    m_titleLabel->setGeometry(130, 8, 400, 48);
-    m_exitButton->setGeometry(m_topBar->width() / 2 - 72, 10, 144, 42);
+    m_exitButton->setGeometry(m_topBar->width() / 2 + 1, 12, 140, 40);
+    m_titleLabel->setGeometry(132, 8, qMin(400, m_exitButton->x() - 156), 48);
+    m_titleLabel->setText(m_titleLabel->fontMetrics().elidedText(
+        QStringLiteral("编辑: %1").arg(m_imageName), Qt::ElideMiddle, m_titleLabel->width()));
     m_saveButton->setGeometry(m_topBar->width() - 94, 10, 82, 44);
     m_openImageButton->setGeometry(m_topBar->width() - 234, 10, 128, 44);
 
-    const int editorLeft = (canvasWidth - 980) / 2;
-    const int statusTop = canvasHeight - 159;
+    const int editorLeft = (canvasWidth - 978) / 2;
+    const int statusTop = canvasHeight - 160;
     const int toolsTop = canvasHeight - 94;
-    m_statusBar->setGeometry(editorLeft, statusTop, 980, 53);
+    m_statusBar->setGeometry(editorLeft, statusTop, 978, 53);
     m_statusIcon->setGeometry(12, 7, 32, 39);
     m_statusLabel->setGeometry(46, 7, 470, 39);
-    m_addButton->setGeometry(527, 6, 132, 41);
-    m_subtractButton->setGeometry(667, 6, 132, 41);
-    m_generateButton->setGeometry(807, 6, 164, 41);
+    m_addButton->setGeometry(526, 6, 132, 41);
+    m_subtractButton->setGeometry(666, 6, 132, 41);
+    m_generateButton->setGeometry(806, 6, 164, 41);
 
-    m_leftTools->setGeometry(editorLeft, toolsTop, 166, 60);
+    m_leftTools->setGeometry(editorLeft, toolsTop, 164, 60);
     m_centerTools->setGeometry(editorLeft + 177, toolsTop, 580, 60);
-    m_aiTools->setGeometry(editorLeft + 769, toolsTop, 210, 60);
-    m_aiLabel->setGeometry(14, 8, 140, 44);
-    m_aiSwitch->move(153, 17);
+    m_aiTools->setGeometry(editorLeft + 768, toolsTop, 210, 60);
+    m_aiLabel->setGeometry(50, 8, 96, 44);
+    m_aiSwitch->move(148, 10);
 
     m_downloadButton->setGeometry(half + 222, canvasHeight - 216, 96, 41);
     m_fullscreenButton->setGeometry(half + 326, canvasHeight - 216, 92, 41);
 
     m_modalShade->setGeometry(rect());
-    m_modalStack->setGeometry((canvasWidth - 500) / 2, (canvasHeight - 286) / 2, 500, 286);
+    const QSize modalSize = m_state == UiState::Generating ? QSize(460, 256)
+                            : m_state == UiState::Failed ? QSize(480, 260) : QSize(500, 286);
+    m_modalStack->setGeometry(QRect(QPoint((canvasWidth - modalSize.width()) / 2,
+                                         (canvasHeight - modalSize.height()) / 2), modalSize));
 
-    m_toast->setGeometry((canvasWidth - 360) / 2, 116, 360, 64);
     const bool hasDetail = !m_toastDetail->text().isEmpty();
-    m_toastTitle->setGeometry(64, hasDetail ? 10 : 0, 188, hasDetail ? 24 : 64);
-    m_toastDetail->setGeometry(64, 32, 188, 20);
+    const bool hasAction = !m_toastAction->isHidden();
+    const int toastWidth = hasDetail ? qBound(360, m_toastDetail->fontMetrics().horizontalAdvance(
+        m_toastDetail->text()) + (hasAction ? 188 : 88), qMin(720, canvasWidth - 80)) : 360;
+    const int textWidth = toastWidth - (hasAction ? 172 : 88);
+    m_toast->setGeometry((canvasWidth - toastWidth) / 2, 116, toastWidth, hasDetail ? 88 : 64);
+    m_toastTitle->setGeometry(64, hasDetail ? 10 : 0, textWidth, hasDetail ? 24 : 64);
+    m_toastDetail->setGeometry(64, 34, textWidth, 44);
+    m_toastAction->move(toastWidth - 100, hasDetail ? 24 : 12);
 
     m_contentLayer->lower();
     m_imageView->lower();
@@ -1464,46 +1535,42 @@ void EditorCanvas::layoutInterface()
 
 void EditorCanvas::applyState(bool animateModal)
 {
-    const bool split = isSplitState(m_state);
-    m_titleLabel->setText(split
-                              ? QStringLiteral("编辑: %1  ·  3D 预览").arg(m_imageName)
-                              : QStringLiteral("编辑: %1").arg(m_imageName));
-
     const int count = m_imageView->positiveCount();
     if (count == 0) {
-        if (!m_serviceDetail.isEmpty() && !m_serviceReady)
-            m_statusLabel->setText(QStringLiteral("函数服务：%1").arg(m_serviceDetail));
-        else
-            m_statusLabel->setText(m_aiSwitch->isChecked()
-                                       ? QStringLiteral("请点击画面中的微生物，左键增加，右键减少")
-                                       : QStringLiteral("AI 捕捉已关闭"));
+        m_statusLabel->setText(m_aiSwitch->isChecked()
+                                   ? QStringLiteral("请点击画面中的微生物进行捕捉")
+                                   : QStringLiteral("AI 捕捉已关闭"));
     } else if (!m_selectionError.isEmpty()) {
-        m_statusLabel->setText(QStringLiteral("选区计算失败：%1").arg(m_selectionError));
+        m_statusLabel->setText(QStringLiteral("捕捉失败，请检查连接后重新点选"));
     } else if (m_segmentQueued) {
-        m_statusLabel->setText(QStringLiteral("已排队最新选区，当前请求完成后自动更新"));
+        m_statusLabel->setText(QStringLiteral("正在处理最新选区，请稍候"));
     } else if (m_segmentBusy) {
-        m_statusLabel->setText(QStringLiteral("正在通过函数计算更新选区 · POST /segment"));
+        m_statusLabel->setText(QStringLiteral("正在识别选区，请稍候"));
     } else if (m_maskReady) {
-        m_statusLabel->setText(QStringLiteral("函数 Mask 已更新，可继续增加或减少选区"));
+        m_statusLabel->setText(QStringLiteral("已识别选区，可继续增加或减少选区"));
     } else {
-        m_statusLabel->setText(QStringLiteral("等待函数返回选区 Mask"));
+        m_statusLabel->setText(QStringLiteral("正在等待选区结果"));
     }
+    m_statusLabel->setToolTip(m_selectionError.isEmpty()
+        ? QStringLiteral("左键增加选区，右键减少选区") : m_selectionError);
+    m_leftToolButtons.at(2)->setToolTip(m_demoStateLocked ? QStringLiteral("函数服务设置")
+        : QStringLiteral("函数服务设置\n%1").arg(m_serviceDetail));
 
     m_generateButton->setEnabled(m_maskReady
                                  && !m_segmentBusy
                                  && !m_segmentQueued
                                  && m_state != UiState::Generating);
     m_addButton->setEnabled(m_state != UiState::Generating);
-    m_subtractButton->setEnabled(m_state != UiState::Generating);
+    m_subtractButton->setEnabled(count > 0 && m_state != UiState::Generating);
     m_addButton->setChecked(m_addMode);
     m_subtractButton->setChecked(!m_addMode);
     m_imageView->setAddMode(m_addMode);
     m_imageView->setInteractive(m_aiSwitch->isChecked()
-                                && m_state != UiState::Generating);
+                                && m_state != UiState::Generating && !m_demoStateLocked);
 
     const bool hasResult = m_state == UiState::Result && !m_model.isEmpty();
-    m_downloadButton->setVisible(hasResult);
-    m_fullscreenButton->setVisible(hasResult);
+    m_downloadButton->setVisible(hasResult || (m_demoStateLocked && isSplitState(m_state)));
+    m_fullscreenButton->setVisible(hasResult || (m_demoStateLocked && isSplitState(m_state)));
 
     const bool modalVisible = m_state == UiState::CreditConfirm
                               || m_state == UiState::Generating
@@ -1747,11 +1814,17 @@ void EditorCanvas::dispatchSegmentation()
 
 void EditorCanvas::beginGeneration()
 {
+    if (m_demoStateLocked) {
+        showToast(QStringLiteral("当前为设计预览"), QStringLiteral("点击“选择图片”后即可开始捕捉和生成"), false);
+        return;
+    }
     if (!m_maskReady || m_maskImage.isNull()) {
         showToast(QStringLiteral("无法开始生成"), QStringLiteral("当前选区还没有有效 Mask"), false);
         return;
     }
     m_failedBody->setText(QStringLiteral("生成过程未能完成，请检查网络后重新尝试"));
+    m_failedBody->setToolTip(QString());
+    m_generationProgress->setRange(0, 0);
     setState(UiState::Generating);
     m_client->generate(m_sourceImage, m_maskImage, 42);
 }
@@ -1760,7 +1833,8 @@ void EditorCanvas::completeGeneration(const QByteArray &glb)
 {
     QString error;
     if (!m_model.loadGlbData(glb, &error)) {
-        m_failedBody->setText(QStringLiteral("GLB 解析失败：%1").arg(error));
+        m_failedBody->setText(QStringLiteral("模型读取失败，请重新生成"));
+        m_failedBody->setToolTip(error);
         setState(UiState::Failed);
         return;
     }
@@ -1848,12 +1922,39 @@ void EditorCanvas::setDemoState(const QString &stateName)
     m_toastTimer.stop();
     m_demoStateLocked = true;
     m_savedToastVisible = false;
-    m_addMode = true;
+    m_addMode = name == QStringLiteral("waiting");
+    m_sourceImage.load(QStringLiteral(":/design/sample-microbe.png"));
+    m_imagePath.clear();
+    m_imageName = QStringLiteral("叶片表皮");
+    m_imageView->setSourceImage(m_sourceImage);
     m_imageView->setDemoSelections(name != QStringLiteral("waiting"));
     m_maskReady = name != QStringLiteral("waiting");
+    m_maskImage = QImage();
+    if (m_maskReady) {
+        // The design's red selection is a fixture for explicit screenshot previews only.
+        // Never paint the reference UI over the native controls or send this mask to the service.
+        const QImage reference(QStringLiteral(":/design/sample-selected.png"));
+        QImage mask(reference.size(), QImage::Format_Grayscale8);
+        mask.fill(0);
+        for (int y = 0; y < reference.height(); ++y) {
+            uchar *row = mask.scanLine(y);
+            for (int x = 0; x < reference.width(); ++x) {
+                if (QRect(40, 28, 1200, 64).contains(x, y)
+                    || QRect(150, 640, 980, 54).contains(x, y) || y >= 706)
+                    continue;
+                const QColor pixel = reference.pixelColor(x, y);
+                if (pixel.red() > 45 && pixel.red() > pixel.green() * 1.18
+                    && pixel.red() > pixel.blue() * 1.1)
+                    row[x] = 255;
+            }
+        }
+        m_maskImage = mask.scaled(m_sourceImage.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        m_imageView->setMask(m_maskImage);
+    }
+    m_generationProgress->setRange(0, 100);
+    m_generationProgress->setValue(62);
     m_selectionError.clear();
-    if (name != QStringLiteral("result") && name != QStringLiteral("saved"))
-        m_model.clear();
+    m_model.clear();
 
     if (name == QStringLiteral("confirm"))
         m_state = UiState::CreditConfirm;
@@ -1863,7 +1964,6 @@ void EditorCanvas::setDemoState(const QString &stateName)
         m_state = UiState::Failed;
     else if (name == QStringLiteral("result") || name == QStringLiteral("saved")) {
         m_state = UiState::Result;
-        m_model.createOrganicSample();
         m_modelName = QStringLiteral("叶片表皮 · 微生物重建");
         if (name == QStringLiteral("saved")) {
             m_savedToastVisible = true;
@@ -1878,5 +1978,7 @@ void EditorCanvas::setDemoState(const QString &stateName)
         m_maskReady = false;
         m_imageView->setDemoSelections(false);
     }
+    if (isSplitState(m_state))
+        m_model.createOrganicSample();
     applyState(false);
 }

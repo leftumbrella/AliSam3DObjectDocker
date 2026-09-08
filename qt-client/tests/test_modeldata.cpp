@@ -6,6 +6,8 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFile>
+#include <QFontInfo>
+#include <QFontDatabase>
 #include <QHash>
 #include <QImage>
 #include <QMimeData>
@@ -257,6 +259,7 @@ private slots:
     void editorUsesFunctionComputeForSelectionAndGeneration();
     void selectedImageLeavesDemoAndUsesOriginalCoordinates();
     void replacingImageDiscardsPendingSelection();
+    void demoPreviewCannotSubmitGeneration();
 };
 
 void ModelDataTest::proceduralModelHasGeometry()
@@ -311,10 +314,23 @@ void ModelDataTest::editorUsesNativeControls()
     editor.show();
     QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
 
+    const QFont titleFont = editor.findChild<QLabel *>(QStringLiteral("TitleLabel"))->font();
+    if (QFontDatabase().families().contains(QStringLiteral("Microsoft YaHei UI")))
+        QCOMPARE(QFontInfo(titleFont).family(), QStringLiteral("Microsoft YaHei UI"));
+
     QVERIFY2(editor.findChildren<QPushButton *>().size() >= 8,
              "The editor must use native interactive Qt controls.");
     QVERIFY2(editor.findChild<QStackedWidget *>(QStringLiteral("StateModal")),
              "Generation states must use a real modal stack.");
+    editor.resize(1180, 720);
+    QCoreApplication::processEvents();
+    auto *status = editor.findChild<QLabel *>(QStringLiteral("SelectionStatus"));
+    QVERIFY(status);
+    QVERIFY(status->fontMetrics().horizontalAdvance(status->text()) <= status->width());
+    auto *title = editor.findChild<QLabel *>(QStringLiteral("TitleLabel"));
+    auto *exit = buttonWithText(editor, QStringLiteral("退出编辑模式"));
+    QVERIFY(exit);
+    QVERIFY(title->geometry().right() < exit->geometry().left());
     editor.close();
 }
 
@@ -531,6 +547,25 @@ void ModelDataTest::replacingImageDiscardsPendingSelection()
     QCOMPARE(server.segmentBodies.size(), 2);
     QCOMPARE(server.segmentBodies.last().count("\"label\""), 1);
     QCOMPARE(QImage::fromData(multipartField(server.segmentBodies.last(), "image")), replacement);
+}
+
+void ModelDataTest::demoPreviewCannotSubmitGeneration()
+{
+    FakeFunctionServer server(QSize(1280, 800), minimalGlb());
+    QVERIFY(server.listen());
+    EditorCanvas editor;
+    QVERIFY(editor.setServiceEndpoint(server.endpoint()));
+    editor.resize(1280, 800);
+    editor.setDemoState(QStringLiteral("confirm"));
+    editor.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&editor, 1200));
+    auto *confirm = buttonWithText(editor, QStringLiteral("确认转换"));
+    QVERIFY(confirm);
+    QTest::mouseClick(confirm, Qt::LeftButton);
+    QCoreApplication::processEvents();
+    QCOMPARE(int(editor.uiState()), int(EditorCanvas::UiState::CreditConfirm));
+    QVERIFY(server.segmentBodies.isEmpty());
+    QVERIFY(server.generationBodies.isEmpty());
 }
 
 QTEST_MAIN(ModelDataTest)
