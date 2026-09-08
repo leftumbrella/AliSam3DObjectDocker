@@ -13,6 +13,8 @@ PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 readonly PROJECT_ROOT
 readonly OSS_REGION_ID='cn-shenzhen'
 readonly OSS_PUBLIC_ENDPOINT='https://oss-cn-shenzhen.aliyuncs.com'
+readonly DOCKERHUB_HOST='docker.io'
+readonly DOCKERHUB_DEFAULT_IMAGE='swayzay/sam3d'
 readonly OSSUTIL_VERSION='2.3.0'
 readonly OSSUTIL_SHA256='3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a'
 readonly SYSTEM_PYTHON='/usr/bin/python3'
@@ -26,14 +28,13 @@ readonly NVCC_THREADS_VALUE='2'
 
 TRANSFER_ROOT=''
 OSS_BUCKET=''
-ACR_IMAGE=''
-ACR_USERNAME=''
+DOCKERHUB_IMAGE=''
+DOCKERHUB_USERNAME=''
 CACHED_OSS_ACCESS_KEY_ID=''
 CACHED_OSS_ACCESS_KEY_SECRET=''
-CACHED_ACR_REGISTRY_PASSWORD=''
+CACHED_DOCKERHUB_TOKEN=''
 export -n CACHED_OSS_ACCESS_KEY_ID CACHED_OSS_ACCESS_KEY_SECRET
-export -n CACHED_ACR_REGISTRY_PASSWORD
-ACR_HOST=''
+export -n CACHED_DOCKERHUB_TOKEN
 OSSUTIL_BIN=''
 TOOLS_PYTHON=''
 OSS_UPLOAD_LIST=''
@@ -52,7 +53,7 @@ ASSET_RECEIPT_KEY=''
 OSS_PREFIX=''
 DEPLOYMENT_RESULT_FILE=''
 CURRENT_STEP='启动'
-ACR_LOGIN_ACTIVE=0
+DOCKERHUB_LOGIN_ACTIVE=0
 DOCKER_READY=0
 DOCKER_USE_SUDO=0
 TEMP_DIR=''
@@ -83,7 +84,7 @@ on_error() {
 safe_remove_temp_dir() {
   [[ -n "$TEMP_DIR" ]] || return
   case "$TEMP_DIR" in
-    /tmp/sam3d-acr-push.*)
+    /tmp/sam3d-dockerhub-push.*)
       if [[ -d "$TEMP_DIR" && ! -L "$TEMP_DIR" ]]; then
         if ! rm -rf -- "$TEMP_DIR" >/dev/null 2>&1; then
           run_privileged rm -rf -- "$TEMP_DIR" \
@@ -102,13 +103,12 @@ cleanup() {
   trap - ERR
   set +e
 
-  if [[ "$ACR_LOGIN_ACTIVE" -eq 1 && "$DOCKER_READY" -eq 1 \
-    && -n "$ACR_HOST" ]]; then
-    run_docker logout "$ACR_HOST" >/dev/null 2>&1
+  if [[ "$DOCKERHUB_LOGIN_ACTIVE" -eq 1 && "$DOCKER_READY" -eq 1 ]]; then
+    run_docker logout "$DOCKERHUB_HOST" >/dev/null 2>&1
   fi
-  unset ACR_IMAGE ACR_USERNAME ACR_HOST DOCKER_CONFIG
+  unset DOCKERHUB_IMAGE DOCKERHUB_USERNAME DOCKER_CONFIG
   unset CACHED_OSS_ACCESS_KEY_ID CACHED_OSS_ACCESS_KEY_SECRET
-  unset CACHED_ACR_REGISTRY_PASSWORD
+  unset CACHED_DOCKERHUB_TOKEN
   unset OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_SESSION_TOKEN
   unset OSS_REGION OSS_ENDPOINT
   safe_remove_temp_dir
@@ -143,7 +143,7 @@ require_target_host() {
     22.04|24.04) ;;
     *) warn "当前 Ubuntu ${VERSION_ID:-unknown} 不是已验证的 22.04/24.04" ;;
   esac
-  [[ -t 0 ]] || die '脚本需要交互终端来一次性读取 OSS 和 ACR 信息及凭证'
+  [[ -t 0 ]] || die '脚本需要交互终端来一次性读取 OSS 和 Docker Hub 信息及凭证'
 }
 
 run_privileged() {
@@ -157,41 +157,40 @@ run_privileged() {
 }
 
 prompt_required_inputs() {
-  CURRENT_STEP='一次性读取 OSS 和 ACR 必要信息及凭证'
+  CURRENT_STEP='一次性读取 OSS 和 Docker Hub 必要信息及凭证'
   read -r -p '深圳 OSS Bucket 名: ' OSS_BUCKET
   read -r -p 'OSS AccessKey ID: ' CACHED_OSS_ACCESS_KEY_ID
   read -r -s -p 'OSS AccessKey Secret: ' CACHED_OSS_ACCESS_KEY_SECRET
   printf '\n'
-  read -r -p 'ACR 完整公网仓库地址（不含协议和 tag）: ' ACR_IMAGE
-  read -r -p 'ACR 登录用户名: ' ACR_USERNAME
-  read -r -s -p 'ACR Registry 密码: ' CACHED_ACR_REGISTRY_PASSWORD
+  read -r -p "Docker Hub 仓库（namespace/repository，回车使用 ${DOCKERHUB_DEFAULT_IMAGE}）: " DOCKERHUB_IMAGE
+  if [[ -z "$DOCKERHUB_IMAGE" ]]; then
+    DOCKERHUB_IMAGE="$DOCKERHUB_DEFAULT_IMAGE"
+  fi
+  read -r -p 'Docker Hub 登录用户名: ' DOCKERHUB_USERNAME
+  read -r -s -p 'Docker Hub Access Token: ' CACHED_DOCKERHUB_TOKEN
   printf '\n'
   [[ -n "$OSS_BUCKET" ]] || die 'OSS Bucket 名不能为空'
   if [[ -n "$CACHED_OSS_ACCESS_KEY_ID" && -z "$CACHED_OSS_ACCESS_KEY_SECRET" ]] \
     || [[ -z "$CACHED_OSS_ACCESS_KEY_ID" && -n "$CACHED_OSS_ACCESS_KEY_SECRET" ]]; then
     die 'OSS AccessKey ID 和 Secret 必须同时填写或同时留空'
   fi
-  [[ -n "$ACR_IMAGE" ]] || die 'ACR 仓库地址不能为空'
-  [[ -n "$ACR_USERNAME" ]] || die 'ACR 登录用户名不能为空'
-  [[ -n "$CACHED_ACR_REGISTRY_PASSWORD" ]] || die 'ACR Registry 密码不能为空'
+  [[ -n "$DOCKERHUB_IMAGE" ]] || die 'Docker Hub 仓库地址不能为空'
+  [[ -n "$DOCKERHUB_USERNAME" ]] || die 'Docker Hub 登录用户名不能为空'
+  [[ -n "$CACHED_DOCKERHUB_TOKEN" ]] || die 'Docker Hub Access Token 不能为空'
 }
 
 validate_inputs() {
-  local resolved_transfer_root
-  local acr_image_pattern='^([A-Za-z0-9.-]+)/([a-z0-9._-]+)/([a-z0-9._-]+)$'
+  local resolved_transfer_root image_path
+  local dockerhub_image_pattern='^[a-z0-9][a-z0-9_-]*/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$'
   [[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] \
     || die 'OSS Bucket 名必须为 3 到 63 位小写字母、数字或连字符'
-  if [[ "$ACR_IMAGE" =~ $acr_image_pattern ]]; then
-    ACR_HOST=${BASH_REMATCH[1]}
-  else
-    die 'ACR 仓库地址必须是域名/namespace/repository，不能包含协议、tag 或多余路径'
-  fi
-  [[ "$ACR_HOST" == *'.aliyuncs.com' ]] \
-    || die 'ACR 仓库必须使用阿里云容器镜像服务域名'
-  [[ "$ACR_HOST" != *'-vpc'* && "$ACR_HOST" != *'-internal'* ]] \
-    || die '构建机推送镜像必须使用 ACR 公网地址，不能使用 -vpc 或 -internal'
-  [[ ! "$ACR_USERNAME" =~ [[:cntrl:]] ]] \
-    || die 'ACR 登录用户名包含非法控制字符'
+  image_path=${DOCKERHUB_IMAGE#docker.io/}
+  [[ "$image_path" =~ $dockerhub_image_pattern ]] \
+    || die 'Docker Hub 仓库必须是 namespace/repository 或 docker.io/namespace/repository，使用小写名称，不能包含协议、tag 或多余路径'
+  DOCKERHUB_IMAGE="${DOCKERHUB_HOST}/${image_path}"
+  [[ ${#DOCKERHUB_IMAGE} -le 255 ]] || die 'Docker Hub 仓库地址不能超过 255 个字符'
+  [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]] \
+    || die 'Docker Hub 登录用户名必须填写 Docker ID，不能填写邮箱或包含空白字符'
   resolved_transfer_root="$(realpath -m -- "$TRANSFER_ROOT")"
   [[ "$resolved_transfer_root" != '/' ]] || die '离线资源目录不能是文件系统根目录'
   case "$resolved_transfer_root" in
@@ -293,7 +292,7 @@ run_docker() {
     else
       status=$?
     fi
-    [[ "$TEMP_DIR" == /tmp/sam3d-acr-push.* \
+    [[ "$TEMP_DIR" == /tmp/sam3d-dockerhub-push.* \
       && -d "$TEMP_DIR" && ! -L "$TEMP_DIR" ]] \
       || die 'Docker 临时目录状态异常，拒绝修改所有权'
     run_privileged chown -R --no-dereference \
@@ -411,14 +410,14 @@ build_image() {
   select_local_image_digest
   digest_hex=${LOCAL_IMAGE_DIGEST#sha256:}
   IMAGE_TAG="sam3-sam3d-${GIT_COMMIT_SHORT}-${digest_hex:0:12}"
-  REMOTE_IMAGE="${ACR_IMAGE}:${IMAGE_TAG}"
+  REMOTE_IMAGE="${DOCKERHUB_IMAGE}:${IMAGE_TAG}"
   log "镜像构建完成：$LOCAL_IMAGE，未压缩大小 ${image_size} 字节"
   log "自动生成内容寻址标签：$REMOTE_IMAGE"
 }
 
 ensure_temp_dir() {
   if [[ -z "$TEMP_DIR" ]]; then
-    TEMP_DIR="$(mktemp -d /tmp/sam3d-acr-push.XXXXXX)"
+    TEMP_DIR="$(mktemp -d /tmp/sam3d-dockerhub-push.XXXXXX)"
     install -m 0700 -d "$TEMP_DIR/docker-config"
     export DOCKER_CONFIG="$TEMP_DIR/docker-config"
   fi
@@ -870,19 +869,19 @@ upload_offline_assets() {
   clear_oss_environment
 }
 
-login_acr() {
-  CURRENT_STEP='登录 ACR'
-  local password="$CACHED_ACR_REGISTRY_PASSWORD"
-  CACHED_ACR_REGISTRY_PASSWORD=''
+login_dockerhub() {
+  CURRENT_STEP='登录 Docker Hub'
+  local password="$CACHED_DOCKERHUB_TOKEN"
+  CACHED_DOCKERHUB_TOKEN=''
   ensure_temp_dir
 
-  [[ -n "$password" ]] || die '启动时未读取 ACR Registry 密码'
+  [[ -n "$password" ]] || die '启动时未读取 Docker Hub Access Token'
   printf '%s' "$password" | run_docker login \
-    --username "$ACR_USERNAME" \
+    --username "$DOCKERHUB_USERNAME" \
     --password-stdin \
-    "$ACR_HOST"
+    "$DOCKERHUB_HOST"
   password=''
-  ACR_LOGIN_ACTIVE=1
+  DOCKERHUB_LOGIN_ACTIVE=1
 }
 
 get_remote_config_digest() {
@@ -990,7 +989,7 @@ remote_digest_matches_local_with_retry() {
 }
 
 push_image() {
-  CURRENT_STEP='推送统一镜像到 ACR'
+  CURRENT_STEP='推送统一镜像到 Docker Hub'
   local attempt delay
   run_docker tag "$LOCAL_IMAGE" "$REMOTE_IMAGE"
 
@@ -1019,7 +1018,7 @@ push_image() {
 }
 
 verify_remote_manifest() {
-  CURRENT_STEP='检查 ACR 远程 Manifest'
+  CURRENT_STEP='检查 Docker Hub 远程 Manifest'
   local attempt manifest_info manifest_json platforms
   for attempt in 1 2 3; do
     if manifest_info="$(run_docker buildx imagetools inspect "$REMOTE_IMAGE")" \
@@ -1028,9 +1027,9 @@ verify_remote_manifest() {
       break
     fi
     if [[ "$attempt" -eq 3 ]]; then
-      die 'ACR 远程 Manifest 连续读取失败 3 次'
+      die 'Docker Hub 远程 Manifest 连续读取失败 3 次'
     fi
-    warn "ACR Manifest 第 ${attempt} 次读取失败，稍后自动重试"
+    warn "Docker Hub Manifest 第 ${attempt} 次读取失败，稍后自动重试"
     sleep "$attempt"
   done
   platforms="$(
@@ -1047,7 +1046,7 @@ verify_remote_manifest() {
     || die "远程镜像必须且只能包含 linux/amd64，实际平台：${platforms:-无法识别}"
   remote_digest_matches_local_with_retry \
     || die 'Manifest 校验后远程镜像摘要与本地镜像不一致'
-  log 'ACR 远程 Manifest 校验通过'
+  log 'Docker Hub 远程 Manifest 校验通过'
 }
 
 write_deployment_result() {
@@ -1076,7 +1075,7 @@ print_plan() {
   离线资源目录： $TRANSFER_ROOT
   深圳 OSS：     oss://$OSS_BUCKET/sam3d/releases/bundle-<资源清单摘要>/
   本地镜像：     $LOCAL_IMAGE
-  目标仓库：     $ACR_IMAGE
+  目标仓库：     $DOCKERHUB_IMAGE
 
 脚本会先按资源配方完成凭据核对 OSS；已存在完全相同的资源包时跳过下载和上传。
 仅在凭据缺失或 CRC64 不一致时，才准备 SAM3、SAM3D、MoGe 和 DINOv2 并修复 OSS，然后构建并推送 linux/amd64 统一镜像。
@@ -1089,7 +1088,7 @@ print_completion() {
 
 OSS 资源上传和镜像推送完成
 
-  ACR 镜像：        $REMOTE_IMAGE
+  Docker Hub 镜像：        $REMOTE_IMAGE
   OSS Bucket：      $OSS_BUCKET
   OSS Bucket 子目录：/$OSS_PREFIX
   FC 本地挂载目录： /mnt/nas/sam3d
@@ -1123,13 +1122,13 @@ main() {
     upload_offline_assets
   fi
   build_image
-  login_acr
+  login_dockerhub
   push_image
   verify_remote_manifest
   write_deployment_result
 
-  run_docker logout "$ACR_HOST" >/dev/null
-  ACR_LOGIN_ACTIVE=0
+  run_docker logout "$DOCKERHUB_HOST" >/dev/null
+  DOCKERHUB_LOGIN_ACTIVE=0
   print_completion
 }
 

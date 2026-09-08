@@ -1,4 +1,4 @@
-"""Contract tests for the zero-argument OSS and ACR publishing entrypoint."""
+"""Contract tests for the zero-argument OSS and Docker Hub publishing entrypoint."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ class HongKongDeployScriptTests(unittest.TestCase):
             with self.subTest(removed=removed):
                 self.assertNotIn(removed, self.script)
 
-    def test_required_oss_and_acr_information_is_prompted(self) -> None:
+    def test_required_oss_and_dockerhub_information_is_prompted(self) -> None:
         prompt_block = self.script.split("prompt_required_inputs() {", 1)[1].split(
             "\n}\n\nvalidate_inputs()", 1
         )[0]
@@ -70,9 +70,9 @@ class HongKongDeployScriptTests(unittest.TestCase):
             "深圳 OSS Bucket 名",
             "OSS AccessKey ID",
             "OSS AccessKey Secret",
-            "ACR 完整公网仓库地址",
-            "ACR 登录用户名",
-            "ACR Registry 密码",
+            "Docker Hub 仓库",
+            "Docker Hub 登录用户名",
+            "Docker Hub Access Token",
         )
         positions = [prompt_block.index(prompt) for prompt in prompts]
         self.assertEqual(positions, sorted(positions))
@@ -88,18 +88,18 @@ class HongKongDeployScriptTests(unittest.TestCase):
         self.assertIn("read -r -s", self.script)
         self.assertNotIn("确认执行", self.script)
         self.assertIn("OSS_BUCKET=''", self.script)
-        self.assertIn("ACR_IMAGE=''", self.script)
-        self.assertIn("ACR_USERNAME=''", self.script)
+        self.assertIn("DOCKERHUB_IMAGE=''", self.script)
+        self.assertIn("DOCKERHUB_USERNAME=''", self.script)
         self.assertIn("CACHED_OSS_ACCESS_KEY_SECRET=''", self.script)
-        self.assertIn("CACHED_ACR_REGISTRY_PASSWORD=''", self.script)
+        self.assertIn("CACHED_DOCKERHUB_TOKEN=''", self.script)
         self.assertIn(
             "export -n CACHED_OSS_ACCESS_KEY_ID CACHED_OSS_ACCESS_KEY_SECRET",
             self.script,
         )
-        self.assertIn("export -n CACHED_ACR_REGISTRY_PASSWORD", self.script)
+        self.assertIn("export -n CACHED_DOCKERHUB_TOKEN", self.script)
         self.assertIn("AccessKey ID 和 Secret 必须同时填写或同时留空", self.script)
-        self.assertNotIn('${ACR_IMAGE:-', self.script)
-        self.assertNotIn('${ACR_USERNAME:-', self.script)
+        self.assertNotIn('${DOCKERHUB_IMAGE:-', self.script)
+        self.assertNotIn('${DOCKERHUB_USERNAME:-', self.script)
 
     def test_script_prepares_uploads_complete_assets_and_pushes_image(self) -> None:
         for required in (
@@ -123,7 +123,7 @@ class HongKongDeployScriptTests(unittest.TestCase):
             '--files-from-raw "$OSS_UPLOAD_LIST"',
             '--output-dir "$output_dir"',
             "build_image",
-            "login_acr",
+            "login_dockerhub",
             "push_image",
             "verify_remote_manifest",
             "run_docker push \"$REMOTE_IMAGE\"",
@@ -152,12 +152,85 @@ class HongKongDeployScriptTests(unittest.TestCase):
             "prepare_offline_assets",
             "upload_offline_assets",
             "build_image",
-            "login_acr",
+            "login_dockerhub",
             "push_image",
             "verify_remote_manifest",
         )
         positions = [main_block.index(step) for step in ordered_steps]
         self.assertEqual(positions, sorted(positions))
+
+    def test_dockerhub_inputs_are_normalized_and_reject_other_registries(self) -> None:
+        cases = (
+            ("alice/sam3dobject", "alice", "docker.io/alice/sam3dobject"),
+            ("docker.io/team/sam3d__object.v2--gpu", "builder", "docker.io/team/sam3d__object.v2--gpu"),
+            ("team-name/sam3d_object", "builder", "docker.io/team-name/sam3d_object"),
+            ("registry.cn-shenzhen.aliyuncs.com/team/image", "alice", None),
+            ("docker.io.evil.example/team/image", "alice", None),
+            ("evil.example/image", "alice", None),
+            ("https://docker.io/team/image", "alice", None),
+            ("team/image:latest", "alice", None),
+            ("team/image@sha256:abcd", "alice", None),
+            ("team/image/extra", "alice", None),
+            ("team/Image", "alice", None),
+            ("team/-image", "alice", None),
+            ("team/$(printf injected)", "alice", None),
+            ("team/image", "alice@example.com", None),
+            ("team/image", "alice\nother", None),
+            ("team/" + "a" * 250, "alice", None),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for repository, username, expected in cases:
+                with self.subTest(repository=repository, username=username):
+                    result = subprocess.run(
+                        [
+                            "bash", "-c",
+                            'source "$1"; TRANSFER_ROOT="$2/transfer"; '
+                            'OSS_BUCKET="example-bucket"; DOCKERHUB_IMAGE="$3"; '
+                            'DOCKERHUB_USERNAME="$4"; validate_inputs; '
+                            'printf "%s" "$DOCKERHUB_IMAGE"',
+                            "bash", str(SCRIPT), directory, repository, username,
+                        ],
+                        cwd=ROOT, text=True, capture_output=True, check=False,
+                    )
+                    if expected is None:
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        self.assertIn("Docker Hub", result.stderr)
+                        self.assertEqual(result.stdout, "")
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout, expected)
+
+    def test_dockerhub_login_uses_stdin_and_clears_the_cached_token(self) -> None:
+        result = subprocess.run(
+            [
+                "bash", "-c", """
+export CACHED_DOCKERHUB_TOKEN='inherited-test-value'
+source "$1"
+prompt_required_inputs
+[[ "$DOCKERHUB_IMAGE" == 'swayzay/sam3d' ]] || exit 8
+run_docker() {
+  [[ "$#" -eq 5 && "$1" == 'login' && "$2" == '--username' \
+    && "$3" == 'test-builder' && "$4" == '--password-stdin' \
+    && "$5" == 'docker.io' ]] || return 9
+  [[ -z "$CACHED_DOCKERHUB_TOKEN" ]] || return 10
+  [[ -z "$(printenv CACHED_DOCKERHUB_TOKEN)" ]] || return 11
+  local received
+  received="$(cat)"
+  [[ "$received" == 'dummy-test-token' ]] || return 12
+  printf 'LOGIN_OK\n'
+}
+login_dockerhub
+[[ -z "$CACHED_DOCKERHUB_TOKEN" && "$DOCKERHUB_LOGIN_ACTIVE" -eq 1 ]]
+printf 'CACHE_CLEARED\n'
+""",
+                "bash", str(SCRIPT),
+            ],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+            input="example-bucket\n\n\n\ntest-builder\ndummy-test-token\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "LOGIN_OK\nCACHE_CLEARED")
+        self.assertNotIn("dummy-test-token", result.stdout + result.stderr)
 
     def test_non_root_execution_keeps_host_tooling_isolated(self) -> None:
         self.assertIn('TRANSFER_ROOT="$user_home/sam3d-transfer"', self.script)
@@ -816,14 +889,14 @@ printf 'KIND=%s\nDIGEST=%s\nREMOTE_DIGEST=%s\n' \
         self.assertIn("set +x", self.script)
         self.assertIn("read -r -s", self.script)
         self.assertIn("--password-stdin", self.script)
-        login_block = self.script.split("login_acr() {", 1)[1].split(
+        login_block = self.script.split("login_dockerhub() {", 1)[1].split(
             "\n}\n\nget_remote_config_digest()", 1
         )[0]
         self.assertNotIn("read -r", login_block)
-        self.assertIn('local password="$CACHED_ACR_REGISTRY_PASSWORD"', login_block)
-        self.assertIn("CACHED_ACR_REGISTRY_PASSWORD=''", login_block)
+        self.assertIn('local password="$CACHED_DOCKERHUB_TOKEN"', login_block)
+        self.assertIn("CACHED_DOCKERHUB_TOKEN=''", login_block)
         self.assertIn('export DOCKER_CONFIG="$TEMP_DIR/docker-config"', self.script)
-        self.assertIn("run_docker logout \"$ACR_HOST\"", self.script)
+        self.assertIn("run_docker logout \"$DOCKERHUB_HOST\"", self.script)
         self.assertIn("safe_remove_temp_dir", self.script)
 
     def test_documentation_exposes_one_zero_argument_command(self) -> None:

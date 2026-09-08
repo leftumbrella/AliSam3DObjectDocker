@@ -1,4 +1,4 @@
-"""Regression checks for the focused OSS and ACR publishing guide."""
+"""Regression checks for the focused OSS and Docker Hub publishing guide."""
 
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ class DeploymentGuideContractTests(unittest.TestCase):
         cls.guide = GUIDE.read_text(encoding="utf-8")
 
     def test_readme_links_the_focused_guide(self) -> None:
-        self.assertIn("[香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)", self.readme)
+        self.assertIn("[香港 ECS 上传 OSS 并推送 Docker Hub 手册](DEPLOYMENT.md)", self.readme)
 
     def test_guide_documents_all_inputs_at_startup(self) -> None:
         for required in (
             "深圳 OSS Bucket 名",
             "OSS AccessKey ID",
-            "ACR 完整公网仓库地址",
-            "ACR 登录用户名",
-            "ACR Registry 密码",
+            "Docker Hub 仓库",
+            "Docker Hub 登录用户名",
+            "Docker Hub Access Token",
             "OSS AccessKey Secret",
         ):
             with self.subTest(required=required):
@@ -34,19 +34,19 @@ class DeploymentGuideContractTests(unittest.TestCase):
 
         self.assertNotIn("Hugging Face Access Token", self.guide)
         self.assertNotIn("OSS STS Token（普通 RAM AccessKey 直接回车）", self.guide)
-        self.assertIn("一次性询问全部 OSS/ACR 信息和凭证", self.guide)
+        self.assertIn("一次性询问全部 OSS/Docker Hub 信息和凭证", self.guide)
         self.assertIn("后续执行过程不再要求输入", self.guide)
 
         self.assertIn("脚本没有任何可选参数", self.guide)
         self.assertNotIn("./scripts/deploy_from_hk.sh --", self.guide)
 
-    def test_guide_scopes_the_script_to_assets_oss_and_acr(self) -> None:
+    def test_guide_scopes_the_script_to_assets_oss_and_dockerhub(self) -> None:
         self.assertIn("准备并校验完整离线模型资源", self.guide)
         self.assertIn("上传深圳 OSS", self.guide)
         self.assertIn("sam3/sam3.pt", self.guide)
         self.assertIn("offline-assets.sha256", self.guide)
         self.assertIn("构建一张 `linux/amd64` 统一镜像", self.guide)
-        self.assertIn("登录 ACR", self.guide)
+        self.assertIn("登录 Docker Hub", self.guide)
         self.assertIn("推送镜像", self.guide)
         self.assertIn("不会创建或修改函数计算", self.guide)
         self.assertIn("不会启动 GPU", self.guide)
@@ -72,7 +72,7 @@ class DeploymentGuideContractTests(unittest.TestCase):
             "跳过全部模型下载和上传",
             "docker.1ms.run",
             "$HOME/sam3d-transfer/ossutil-output",
-            "构建完成后才通过标准输入登录 ACR",
+            "构建完成后才通过标准输入登录 Docker Hub",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.guide)
@@ -93,8 +93,9 @@ class DeploymentGuideContractTests(unittest.TestCase):
     def test_guide_documents_local_wsl2_push_requirements(self) -> None:
         for required in (
             "本地电脑的 WSL2 Ubuntu",
-            "ACR 公网地址",
-            "公网访问控制",
+            "Docker Hub 公网地址",
+            "auth.docker.io",
+            "registry-1.docker.io",
             "上行带宽",
         ):
             with self.subTest(required=required):

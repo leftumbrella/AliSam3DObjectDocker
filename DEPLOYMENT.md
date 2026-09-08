@@ -1,8 +1,8 @@
-# 香港 ECS 上传 OSS 并推送 ACR 手册
+# 香港 ECS 上传 OSS 并推送 Docker Hub 手册
 
-本手册使用一个前台脚本连续完成两项工作：优先复用 OSS 中已经完整发布的离线模型资源，必要时准备并校验完整离线模型资源（SAM 3 + SAM 3D Objects）并上传深圳 OSS；构建统一镜像并推送到阿里云容器镜像服务 ACR。
+本手册使用一个前台脚本连续完成两项工作：优先复用 OSS 中已经完整发布的离线模型资源，必要时准备并校验完整离线模型资源（SAM 3 + SAM 3D Objects）并上传深圳 OSS；构建统一镜像并推送到 Docker Hub。
 
-脚本不会创建或修改函数计算，也不会启动 GPU。OSS Bucket、可访问目标 Bucket 的现有 OSS 身份或普通 RAM AccessKey、ACR 仓库和登录凭证需要提前准备。
+脚本不会创建或修改函数计算，也不会启动 GPU。OSS Bucket、可访问目标 Bucket 的现有 OSS 身份或普通 RAM AccessKey、Docker Hub 仓库和登录凭证需要提前准备。
 
 ## 开始前准备
 
@@ -16,7 +16,7 @@
 - x86_64/amd64 架构。
 - 建议至少 100 GB 可用磁盘和 32 GB 内存。
 - 本地电脑需要可用的 Docker Engine，或已启用 WSL2 集成的 Docker Desktop；大镜像推送耗时取决于本地上行带宽。
-- 能访问 `v4.gh-proxy.org`、`hf-mirror.com`、ModelScope（魔塔社区）、阿里云 PyPI/PyTorch 镜像、`docker.1ms.run`、Docker CE 软件源、深圳 OSS 公网地址和目标 ACR 公网地址。
+- 能访问 `v4.gh-proxy.org`、`hf-mirror.com`、ModelScope（魔塔社区）、阿里云 PyPI/PyTorch 镜像、`docker.1ms.run`、Docker CE 软件源、深圳 OSS 公网地址和目标 Docker Hub 公网地址。
 - 使用普通用户直接运行脚本；系统工具缺失、Docker 服务未启动或当前用户不能访问 Docker socket 时，需要该用户具备 `sudo` 权限。脚本不会修改用户组。
 
 构建过程不需要 GPU。CUDA 扩展会在 CUDA devel 构建镜像内编译。
@@ -35,22 +35,24 @@
 
 脚本把完整资源包上传到新的内容寻址前缀 `sam3d/releases/bundle-<资源清单摘要>/`，不会覆盖旧版本资源包。全部对象通过 CRC64 核对后，脚本最后写入 `sam3d/recipes/<资源配方 ID>/complete.json` 完成凭据；下一台全新的构建机可据此确认同一资源配方已经完整发布。
 
-### ACR
+### Docker Hub
 
-提前创建目标 ACR 命名空间和仓库，并准备：
+提前在 Docker Hub 创建目标仓库，选择公开或私有可见性，并准备：
 
-1. 完整公网仓库地址，例如：
+1. 仓库名称，本项目默认使用：
 
    ```text
-   crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject
+   swayzay/sam3d
    ```
 
-2. ACR 登录用户名。
-3. ACR Registry 密码。
+2. Docker Hub 登录用户名，即 Docker ID，不是邮箱。推送到组织仓库时，namespace 填组织名，登录用户名仍填有推送权限的个人 Docker ID。
+3. 具有 Read & Write 权限的 Docker Hub Access Token。创建方法见 [Docker 官方说明](https://docs.docker.com/security/access-tokens/personal-access-tokens/)。
 
-仓库地址不要包含 `https://`，不要附加 tag，不要使用 `-vpc` 或 `-internal` 地址。
+仓库提示处直接回车会使用 `swayzay/sam3d`。也可填写 `namespace/repository` 或 `docker.io/namespace/repository`，脚本统一生成 `docker.io/namespace/repository:tag`。不要填写 Docker Hub 网页地址、协议、tag 或其他 registry 域名。
 
-本地电脑推送必须使用 ACR 公网地址。ACR 企业版还必须启用公网访问控制，并在公网 ACL 中放行本地出口 IP；如果实例只开放 VPC，本地电脑不能直接推送。个人版按控制台“访问凭证”页面给出的公网登录地址操作即可。
+本地电脑或香港 ECS 推送必须能访问 Docker Hub 公网地址，包括 `auth.docker.io` 和 `registry-1.docker.io`。基础镜像使用的 `docker.1ms.run` 只负责下载构建依赖，不能代理向 Docker Hub 推送我们的镜像。
+
+Docker Personal 免费方案提供不限数量的公开仓库和 1 个私有仓库，受拉取频率和合理使用政策约束，见 [Docker 价格页](https://www.docker.com/pricing/) 和 [使用限制](https://docs.docker.com/docker-hub/usage/)。公开仓库中的代码及镜像层可被任何人下载；脚本沿用已创建仓库的可见性。
 
 ## 获取代码
 
@@ -84,22 +86,22 @@ git status --short
 ./scripts/deploy_from_hk.sh
 ```
 
-脚本启动后一次性询问全部 OSS/ACR 信息和凭证，后续执行过程不再要求输入 OSS/ACR 内容：
+脚本启动后一次性询问全部 OSS/Docker Hub 信息和凭证，后续执行过程不再要求输入 OSS/Docker Hub 内容：
 
 ```text
 深圳 OSS Bucket 名:
 OSS AccessKey ID:
 OSS AccessKey Secret:
-ACR 完整公网仓库地址（不含协议和 tag）:
-ACR 登录用户名:
-ACR Registry 密码:
+Docker Hub 仓库（namespace/repository，回车使用 swayzay/sam3d）:
+Docker Hub 登录用户名:
+Docker Hub Access Token:
 ```
 
 已有可用的 ECS RAM Role、ossutil 身份或 OSS 环境凭证时，AccessKey ID 和 Secret 可以同时留空；否则必须同时填写普通 RAM AccessKey。身份不可用时脚本会直接报错，不会在执行中途再次询问。
 
-AccessKey Secret 和 Registry 密码会隐藏读取，不会出现在命令行参数、Git 或最终结果文件中。手动输入的凭证读取后先保存在未导出的 shell 变量中；OSS AccessKey 只在访问 OSS 期间临时导出，Registry 密码只在镜像构建完成后通过标准输入交给 `docker login`。脚本使用后会立即清空对应变量，退出时还会清理进程环境和临时 Docker 凭证目录。
+AccessKey Secret 和 Docker Hub Access Token 会隐藏读取，不会出现在命令行参数、Git 或最终结果文件中。手动输入的凭证读取后先保存在未导出的 shell 变量中；OSS AccessKey 只在访问 OSS 期间临时导出，Docker Hub Access Token 只在镜像构建完成后通过标准输入交给 `docker login`。脚本使用后会立即清空对应变量，退出时还会清理进程环境和临时 Docker 凭证目录。
 
-如果安装系统工具、启动 Docker 或访问 Docker socket 需要 `sudo`，操作系统仍可能按自身策略询问当前用户的本机密码；这不属于 OSS/ACR 输入，脚本不会读取或缓存该密码。
+如果安装系统工具、启动 Docker 或访问 Docker socket 需要 `sudo`，操作系统仍可能按自身策略询问当前用户的本机密码；这不属于 OSS/Docker Hub 输入，脚本不会读取或缓存该密码。
 
 SAM3D 或 SAM3 主权重缺失时，脚本会直接从 ModelScope 下载，不会读取 Hugging Face Token。脚本不再提示输入 OSS STS Token。
 
@@ -117,11 +119,11 @@ SAM3D 或 SAM3 主权重缺失时，脚本会直接从 ModelScope 下载，不�
 8. 使用断点目录上传深圳 OSS，错误报告固定写到 `$HOME/sam3d-transfer/ossutil-output`，不会污染 Git checkout。
 9. 对清单中的每个远端对象执行精确 CRC64 核对；缺失或不一致的对象会强制重传并再次校验，全部成功后才写入完成凭据。
 10. 构建一张 `linux/amd64` 统一镜像。
-11. ACR 密码虽然在启动时统一读取，但不会导出给模型下载或第三方安装步骤；构建完成后才通过标准输入登录 ACR。
-12. 根据当前 Git commit 和构建后的镜像摘要自动生成不可变 tag，并用于 ACR 发布。
+11. Docker Hub Access Token 虽然在启动时统一读取，但不会导出给模型下载或第三方安装步骤；构建完成后才通过标准输入登录 Docker Hub。
+12. 根据当前 Git commit 和构建后的镜像摘要自动生成不可变 tag，并用于 Docker Hub 发布。
 13. 推送镜像，失败时自动重试并回读远程摘要确认是否已经成功。
 14. 验证远程 Manifest 只有 `linux/amd64`，且没有 `unknown/unknown` attestation。
-15. 写入不含凭证的部署结果，退出 ACR 登录并清理进程内凭证及临时 Docker 凭证目录。
+15. 写入不含凭证的部署结果，退出 Docker Hub 登录并清理进程内凭证及临时 Docker 凭证目录。
 
 固定构建设置由脚本维护，不要求操作人员选择：
 
@@ -140,11 +142,21 @@ sbom=false
 完成后终端会输出完整远程镜像，例如：
 
 ```text
-ACR 镜像：crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/namespace/sam3dobject:sam3-sam3d-40c2973cc934-a1b2c3d4e5f6
+Docker Hub 镜像：docker.io/swayzay/sam3d:sam3-sam3d-40c2973cc934-a1b2c3d4e5f6
 OSS Bucket 子目录：/sam3d/releases/bundle-a1b2c3d4e5f6
 FC 本地挂载目录：/mnt/nas/sam3d
 结果文件：/home/<当前用户>/sam3d-transfer/deployment-result.env
 ```
+
+## 在 FC 中使用发布的镜像
+
+将完成输出的完整 `docker.io/namespace/repository:tag` 地址填入 FC 自定义镜像配置 `customContainerConfig.image`，监听端口仍为 `9000`。每次发布后，使用新的完整 tag 更新函数配置。
+
+需要认证的仓库在 `customContainerConfig.registryConfig.authConfig` 中配置 `userName`（Docker ID）和 `password`（Docker Hub Access Token）。FC 拉取只需要 Read 权限，可使用单独的只读 Token；公开仓库可匿名拉取，也可配置认证以使用账号的拉取额度。凭证应通过 FC 控制台或部署系统的密钥配置输入，不要写入本仓库。
+
+字段定义见阿里云 [CustomContainerConfig](https://help.aliyun.com/zh/functioncompute/api-fc-2023-03-30-struct-customcontainerconfig)、[RegistryConfig](https://help.aliyun.com/zh/functioncompute/api-fc-2023-03-30-struct-registryconfig) 和 [RegistryAuthConfig](https://help.aliyun.com/zh/functioncompute/api-fc-2023-03-30-struct-registryauthconfig)。实际拉取取决于目标地域、GPU 规格下的镜像配置支持及仓库网络可达性，应在目标 FC 函数验证一次新实例启动；本脚本只验证 Docker Hub 上的发布结果，不会创建或修改函数计算。
+
+OSS 仍按输出的版本子目录只读挂载到 `/mnt/nas/sam3d`，Initializer 继续使用 `["/bin/sh", "/srv/scripts/fc_initializer.sh"]` 依次预热两个模型。
 
 ## 重跑与中断
 
@@ -195,11 +207,12 @@ cache/torch/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth
 - OSS 访问失败：Bucket 必须在深圳；香港 ECS 上传使用公网 Endpoint，并确保 RAM 身份有目标 Bucket 的列举和写入权限。
 - OSS 完成凭据缺失或 CRC64 不匹配：这是安全回退，不会直接使用不完整资源；脚本会检查或准备本地资源、修复远端对象，并在最后重写完成凭据。
 - OSS 上传中断：直接重跑，`$HOME/sam3d-transfer/oss-upload-checkpoints` 会继续断点上传；错误明细在 `$HOME/sam3d-transfer/ossutil-output`。
-- ACR 地址格式错误：使用完整公网 `域名/namespace/repository`，不要添加协议或 tag。
+- Docker Hub 地址格式错误：使用 `namespace/repository` 或 `docker.io/namespace/repository`，不要添加协议或 tag。
 - Docker 安装失败：检查系统是否混装 Ubuntu `docker.io` 与 Docker CE。
 - Docker 基础镜像元数据超时：基础镜像已固定通过 `docker.1ms.run` 拉取，不再直连 `registry-1.docker.io`；确认 ECS 能访问该域名后直接重跑。
 - 构建停在 `./patching/hydra`：旧构建会被上游脚本内无超时的 GitHub Raw 直链阻塞；新版已改为通过 `v4.gh-proxy.org` 显式下载、限时重试并校验 SHA-256，更新代码后直接重跑。
 - 构建停在 gsplat 的 `git submodule update --init --recursive`：旧构建会按上游 `.gitmodules` 直连 GitHub 拉取 GLM；新版只在该构建命令内把子模块 URL 改写到 `v4.gh-proxy.org`，并在连接持续低速 30 秒后明确失败。更新代码后重跑，前面的 PyTorch3D 层仍可复用缓存。
 - CUDA 扩展编译失败：保留首次失败日志；修复网络或资源问题后直接重跑，Buildx 会复用已完成层。
-- ACR 登录失败：使用容器镜像服务控制台提供的固定密码，不是阿里云控制台登录密码。
+- Docker Hub 登录失败：填写 Docker ID 和有效的 Access Token；推送需要 Read & Write 权限，组织仓库还需要该账号具备仓库写权限。
+- Docker Hub 推送或查询 Manifest 失败：确认目标仓库已创建，并检查 `auth.docker.io`、`registry-1.docker.io` 的连通性和账号权限；不能把无权限当作远程 tag 不存在。
 - Manifest 校验失败：远程镜像必须且只能包含 `linux/amd64`。

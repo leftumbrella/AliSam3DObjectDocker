@@ -4,7 +4,7 @@
 
 仓库同时提供按 `design` 设计稿实现的独立 [Qt C++ 桌面客户端](qt-client/README.md)，支持显微图选区、完整生成状态以及 GLB 模型旋转、缩放、平移、全屏与导出。
 
-从香港 ECS 或本地电脑的 WSL2 Ubuntu 上传离线资源并推送镜像时，请直接阅读 [香港 ECS 上传 OSS 并推送 ACR 手册](DEPLOYMENT.md)；两种环境都必须使用 OSS 和 ACR 公网地址。
+从香港 ECS 或本地电脑的 WSL2 Ubuntu 上传离线资源并推送镜像时，请直接阅读 [香港 ECS 上传 OSS 并推送 Docker Hub 手册](DEPLOYMENT.md)；两种环境都必须使用 OSS 和 Docker Hub 公网地址。
 
 ## 当前架构
 
@@ -47,7 +47,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 ## 函数计算控制面
 
-本仓库不创建或修改 FC 函数，也不设置预留实例、函数级并发或单实例并发。`scripts/deploy_from_hk.sh` 只准备 OSS 离线资源并构建、推送 ACR 镜像；弹性与并发由运行平台单独配置。
+本仓库不创建或修改 FC 函数，也不设置预留实例、函数级并发或单实例并发。`scripts/deploy_from_hk.sh` 只准备 OSS 离线资源并构建、推送 Docker Hub 镜像；弹性与并发由运行平台单独配置。
 
 镜像内部使用共享异步锁和跨进程文件锁，将单个容器内的 GPU 加载与推理串行化。在 FC 控制面将 Initializer 设置为“执行指令”，命令配置为 `["/bin/sh", "/srv/scripts/fc_initializer.sh"]` 后，弹性创建的每个新实例会依次加载两个模型；不要再配置“调用代码”类型的 `POST /initialize`，该公网接口已经移除。冷启动耗时和 300 秒 Initializer 上限需要在实际运行平台验收。
 
@@ -65,7 +65,7 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 ├── shared/gpu_lock.py       # 两个进程共用的 GPU 文件锁
 ├── qt-client/               # Qt 5.15.2 桌面演示与 OpenGL 3D 查看器
 ├── scripts/
-│   ├── deploy_from_hk.sh    # OSS 优先复用资源，必要时上传并推送 ACR
+│   ├── deploy_from_hk.sh    # OSS 优先复用资源，必要时上传并推送 Docker Hub
 │   ├── fc_initializer.sh    # 通过容器内私有入口依次预热两套模型
 │   └── prepare_offline_assets.py
 ├── constraints-unified.txt  # 防止普通 PyPI 解析器替换 cu126 Torch ABI
@@ -78,15 +78,15 @@ GPU 推理互斥：asyncio 单实例锁 + /tmp/sam3d-gpu.lock 跨进程文件锁
 
 ## 一键上传资源并推送镜像
 
-一键脚本可由香港 Ubuntu ECS 或本地电脑的 WSL2 Ubuntu 普通用户直接运行，优先核对并复用 OSS 已完整发布的模型资源；没有可复用资源时，才在本地准备、校验并断点上传深圳 OSS，然后构建统一镜像并推送到 ACR。宿主 Python 不会安装项目包：辅助脚本在退出即删除的无 pip venv 中以 isolated mode 运行。脚本没有任何可选参数：
+一键脚本可由香港 Ubuntu ECS 或本地电脑的 WSL2 Ubuntu 普通用户直接运行，优先核对并复用 OSS 已完整发布的模型资源；没有可复用资源时，才在本地准备、校验并断点上传深圳 OSS，然后构建统一镜像并推送到 Docker Hub。宿主 Python 不会安装项目包：辅助脚本在退出即删除的无 pip venv 中以 isolated mode 运行。脚本没有任何可选参数：
 
 ```bash
 ./scripts/deploy_from_hk.sh
 ```
 
-脚本启动后一次性输入深圳 OSS Bucket、普通 RAM AccessKey ID/Secret、ACR 完整公网仓库地址、ACR 登录用户名和隐藏的 Registry 密码，后续不再询问 OSS/ACR 内容，也不再提示 OSS STS Token；已有可用 OSS 身份时 AccessKey ID/Secret 可以同时留空。脚本先根据固定资源内容计算配方 ID，并检查 `sam3d/recipes/<资源配方 ID>/complete.json`；完成凭据及全部远端对象 CRC64 一致时会跳过模型下载和上传。否则，SAM3 与 SAM3D 主权重从魔搭社区（ModelScope）公开模型下载，MoGe 与 DINOv2 权重通过 HF-Mirror 下载，均不需要 Hugging Face Token。模型校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、完成凭据最后发布、镜像构建、推送重试和 Manifest 校验均自动完成。
+脚本启动后一次性输入深圳 OSS Bucket、普通 RAM AccessKey ID/Secret、Docker Hub 仓库（`namespace/repository`）、Docker ID 和隐藏的 Docker Hub Access Token，后续不再询问 OSS/Docker Hub 内容，也不再提示 OSS STS Token；已有可用 OSS 身份时 AccessKey ID/Secret 可以同时留空。仓库也可填写 `docker.io/namespace/repository`，Token 需具备 Read & Write 权限。脚本先根据固定资源内容计算配方 ID，并检查 `sam3d/recipes/<资源配方 ID>/complete.json`；完成凭据及全部远端对象 CRC64 一致时会跳过模型下载和上传。否则，SAM3 与 SAM3D 主权重从魔搭社区（ModelScope）公开模型下载，MoGe 与 DINOv2 权重通过 HF-Mirror 下载，均不需要 Hugging Face Token。模型校验、OSS 内容寻址前缀、按清单断点上传、远端对象逐项 CRC64 核对与自动修复、完成凭据最后发布、镜像构建、推送重试和 Manifest 校验均自动完成。
 
-脚本不会创建或修改 FC，也不会启动 GPU。完成输出会给出 ACR 镜像、OSS Bucket 子目录以及固定的容器挂载目录 `/mnt/nas/sam3d`。
+仓库提示处直接回车会使用本项目的 `swayzay/sam3d`。脚本不会创建或修改 FC，也不会启动 GPU。完成输出会给出 Docker Hub 镜像、OSS Bucket 子目录以及固定的容器挂载目录 `/mnt/nas/sam3d`。
 
 ## 手动构建
 

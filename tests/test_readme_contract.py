@@ -36,7 +36,7 @@ class ReadmeImagePublishingContractTests(unittest.TestCase):
                 self.assertIn("--provenance=false", block)
                 self.assertIn("--sbom=false", block)
 
-    def test_acr_workflow_rejects_unknown_platform_manifests(self) -> None:
+    def test_dockerhub_workflow_rejects_unknown_platform_manifests(self) -> None:
         self.assertEqual(len(self.manifest_check_blocks), 1)
         block = self.manifest_check_blocks[0]
         self.assertIn("grep -q 'unknown/unknown'", block)
